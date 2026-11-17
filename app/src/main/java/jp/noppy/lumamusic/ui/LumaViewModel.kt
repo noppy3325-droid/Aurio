@@ -26,6 +26,7 @@ class LumaViewModel(application: Application) : AndroidViewModel(application) {
     val users = library.userTracks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val playlists = library.playlists.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val entries = library.entries.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val history = library.dao.history().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     internal val searchIndex = combine(tracks, playlists, ::SearchIndex)
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.Lazily, null)

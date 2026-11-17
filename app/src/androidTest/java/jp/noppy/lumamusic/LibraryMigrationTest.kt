@@ -6,6 +6,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import jp.noppy.lumamusic.data.LibraryDatabase
 import jp.noppy.lumamusic.data.MIGRATION_1_2
+import jp.noppy.lumamusic.data.MIGRATION_2_3
+import jp.noppy.lumamusic.data.PlayHistory
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
@@ -14,7 +16,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.UUID
 
-/** Creates the exact exported v1 schema, then lets Room validate the migrated v2 schema. */
+/** Creates the exact exported v1 schema and verifies every migration to the current schema. */
 @RunWith(AndroidJUnit4::class)
 class LibraryMigrationTest {
     @Test fun migrationPreservesLibraryAndUserEdits() = runBlocking {
@@ -42,7 +44,7 @@ class LibraryMigrationTest {
             old.execSQL("INSERT INTO playlist_entries(playlistId,entryId,trackUri,position) VALUES(7,'entry','fixture',0)")
             old.version=1
         }
-        val upgraded=Room.databaseBuilder(context,LibraryDatabase::class.java,name).addMigrations(MIGRATION_1_2).build()
+        val upgraded=Room.databaseBuilder(context,LibraryDatabase::class.java,name).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
         try {
             upgraded.openHelper.writableDatabase
             val dao=upgraded.library()
@@ -55,6 +57,8 @@ class LibraryMigrationTest {
             assertEquals("User edited lyrics",dao.userTrack("fixture")!!.lyrics)
             assertEquals("Saved playlist",dao.playlists().first().single().name)
             assertEquals("fixture",dao.entries().first().single().trackUri)
+            dao.insertHistory(PlayHistory(trackUri = "fixture", playedAt = 12345))
+            assertEquals("fixture", dao.history().first().single().trackUri)
         } finally { upgraded.close(); context.deleteDatabase(name) }
     }
 }

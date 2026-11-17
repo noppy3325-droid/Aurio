@@ -49,6 +49,8 @@ class PlaybackService : MediaSessionService() {
     private var libraryIndex: Map<String, Track> = emptyMap()
     private var lastScheduledSnapshot: PlaybackSnapshot? = null
     private val queueEdits = Mutex()
+    private var historyListeningMs = 0L
+    private var historyRecorded = false
 
     override fun onCreate() {
         super.onCreate()
@@ -113,6 +115,8 @@ class PlaybackService : MediaSessionService() {
                 else if (events.contains(Player.EVENT_TIMELINE_CHANGED)) save(queueOnly = true)
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                historyListeningMs = 0L
+                historyRecorded = false
                 retryUsed = false
                 app.output.newSource()
                 DspRuntime.source(mediaItem?.mediaId)
@@ -145,6 +149,28 @@ class PlaybackService : MediaSessionService() {
             }
         }
         scope.launch { while (isActive) { delay(5000); save() } }
+        scope.launch {
+            var last = android.os.SystemClock.elapsedRealtime()
+            while (isActive) {
+                delay(1000)
+                val now = android.os.SystemClock.elapsedRealtime()
+                val elapsed = (now - last).coerceIn(0, 1100)
+                last = now
+                val uri = player.currentMediaItem?.mediaId
+                if (player.isPlaying && !historyRecorded && uri != null) {
+                    historyListeningMs += elapsed
+                    val threshold = if (player.duration > 0) (player.duration / 2).coerceIn(1000, 10000) else 10000
+                    if (historyListeningMs >= threshold) {
+                        historyRecorded = true
+                        val playedAt = System.currentTimeMillis()
+                        scope.launch(Dispatchers.IO) {
+                            app.library.dao.insertHistory(PlayHistory(trackUri = uri, playedAt = playedAt))
+                            app.library.dao.trimHistory()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private inner class SessionCallbacks : MediaSession.Callback {

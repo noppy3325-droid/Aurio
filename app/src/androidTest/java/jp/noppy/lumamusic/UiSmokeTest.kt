@@ -277,6 +277,8 @@ class UiSmokeTest {
             }
             activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
             orientation = activity!!.requestedOrientation
+            eventually("home navigation is visible") { tabSelected("ホーム") }
+            click("ライブラリ", tab = true)
             eventually("fixture library") {
                 if (textPresent("確認してください")) runCatching { click("閉じる") }
                 textPresent(top.title)

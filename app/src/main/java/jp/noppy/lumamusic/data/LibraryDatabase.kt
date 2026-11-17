@@ -48,8 +48,15 @@ data class MusicPlaylist(@PrimaryKey(autoGenerate = true) val id: Long = 0, val 
 @Entity(tableName = "playlist_entries", primaryKeys = ["playlistId", "entryId"], indices = [Index("playlistId")])
 data class PlaylistEntry(val playlistId: Long, val entryId: String, val trackUri: String, val position: Int)
 
+@Entity(tableName = "play_history", indices = [Index("playedAt")])
+data class PlayHistory(@PrimaryKey(autoGenerate = true) val id: Long = 0, val trackUri: String, val playedAt: Long)
+
 @Dao
 interface LibraryDao {
+    @Query("SELECT * FROM play_history ORDER BY playedAt DESC, id DESC LIMIT 1000") fun history(): Flow<List<PlayHistory>>
+    @Insert suspend fun insertHistory(entry: PlayHistory)
+    @Query("DELETE FROM play_history WHERE id NOT IN (SELECT id FROM play_history ORDER BY playedAt DESC, id DESC LIMIT 1000)") suspend fun trimHistory()
+    @Query("DELETE FROM play_history") suspend fun clearHistory()
     @Query("SELECT DISTINCT t.* FROM tracks t INNER JOIN track_folders f ON t.uri=f.trackUri ORDER BY t.added DESC")
     fun tracks(): Flow<List<Track>>
     @Query("SELECT * FROM folders") fun folders(): Flow<List<MusicFolder>>
@@ -86,8 +93,15 @@ interface LibraryDao {
     @Query("DELETE FROM playlists WHERE id=:id") suspend fun deletePlaylist(id: Long)
 }
 
-@Database(entities = [Track::class, MusicFolder::class, TrackFolder::class, UserTrack::class, MusicPlaylist::class, PlaylistEntry::class, AudioAnalysisCache::class, DspPreset::class], version = 2, exportSchema = true)
+@Database(entities = [Track::class, MusicFolder::class, TrackFolder::class, UserTrack::class, MusicPlaylist::class, PlaylistEntry::class, AudioAnalysisCache::class, DspPreset::class, PlayHistory::class], version = 3, exportSchema = true)
 abstract class LibraryDatabase : RoomDatabase() { abstract fun library(): LibraryDao }
+
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS play_history (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, trackUri TEXT NOT NULL, playedAt INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_play_history_playedAt ON play_history (playedAt)")
+    }
+}
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {

@@ -90,6 +90,7 @@ import kotlin.math.sin
 internal data class LumaTab(val key: String, val label: String, val icon: ImageVector)
 
 internal val LumaTabs = listOf(
+    LumaTab("home", "ホーム", Icons.Rounded.Home),
     LumaTab("library", "ライブラリ", Icons.Rounded.LibraryMusic),
     LumaTab("search", "検索", Icons.Rounded.Search),
     LumaTab("playlists", "プレイリスト", Icons.Rounded.PlaylistPlay),

@@ -155,7 +155,9 @@ import java.time.format.DateTimeFormatter
                                 val tab = LumaTabs[index].key
                                 tabState.SaveableStateProvider(tab) {
                                     val active = !playerVisible && pager.settledPage == index
-                                    if (tab == "search") {
+                                    if (tab == "home") {
+                                        HomeScreen(vm, tracks, users, playlists, { picker.launch(null) }, openPlayer, bottomContentPadding, active)
+                                    } else if (tab == "search") {
                                         SearchScreen(
                                             vm, tracks, folders, users, playlists, entries, { picker.launch(null) }, openPlayer,
                                             bottomContentPadding = bottomContentPadding,
