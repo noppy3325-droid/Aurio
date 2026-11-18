@@ -315,6 +315,19 @@ class UiSmokeTest {
                     else covers == listOf("アルバムアート: ${track.title}")
                 }
                 screenshot("rev2-artwork-${index + 1}-${track.title.lowercase().replace(' ', '-')}")
+                if (track.title in listOf("Porcelain", "Charcoal", "Blue to coral")) {
+                    val image = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
+                    try {
+                        val gutterX = (image.width * .975f).toInt()
+                        for (heightFraction in listOf(.035f, .82f, .965f)) {
+                            val color = image.getPixel(gutterX, (image.height * heightFraction).toInt())
+                            val channels = listOf(Color.red(color), Color.green(color), Color.blue(color))
+                            assertTrue("${track.title} background lost its color at y=$heightFraction: $channels", channels.max() - channels.min() >= 16)
+                        }
+                    } finally {
+                        image.recycle()
+                    }
+                }
             }
             main { listOf(1, 5, 3, 0).forEach { player.seekTo(it, 2500) } }
             eventually("latest artwork after successive track changes") {

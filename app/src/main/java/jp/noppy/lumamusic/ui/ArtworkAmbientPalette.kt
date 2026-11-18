@@ -1,8 +1,6 @@
 package jp.noppy.lumamusic.ui
 
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.compositeOver
-import androidx.compose.ui.graphics.luminance
 
 internal data class ArtworkAmbientPalette(
     val topLeft: Color,
@@ -11,6 +9,9 @@ internal data class ArtworkAmbientPalette(
     val bottomRight: Color,
     val dominant: Color,
 ) {
+    val accent: Color get() = listOf(dominant, topLeft, topRight, bottomLeft, bottomRight)
+        .maxBy { it.chroma }
+
     companion object {
         val Default = ArtworkAmbientPalette(
             topLeft = Color(0xFF322338),
@@ -58,19 +59,24 @@ internal fun regionColor(
     return Color(red / scale, green / scale, blue / scale)
 }
 
-/** Preserve the channel balance as artwork colors darken. */
-internal fun Color.artworkShade(multiplier: Float): Color = Color(red * multiplier, green * multiplier, blue * multiplier)
+private val Color.peak: Float get() = maxOf(red, green, blue)
+private val Color.floor: Float get() = minOf(red, green, blue)
+private val Color.chroma: Float get() = peak - floor
 
-/** Find the lightest scrim that still meets the target over this region's brightest tone. */
-internal fun nowPlayingScrim(brightest: Color, hue: Color, maxLuminance: Float): Color {
-    val tint = hue.artworkShade(.17f)
-    if (brightest.luminance() <= maxLuminance) return tint.copy(alpha = 0f)
-    var low = 0f
-    var high = 1f
-    repeat(10) {
-        val middle = (low + high) / 2f
-        val result = tint.copy(alpha = middle).compositeOver(brightest)
-        if (result.luminance() <= maxLuminance) high = middle else low = middle
+/**
+ * Grade the canvas colors before drawing them. Every channel stays within the
+ * ceiling for the control region, so white controls don't need a second scrim.
+ */
+internal fun playerAmbientTone(sample: Color, accent: Color, ceiling: Float): Color {
+    val source = when {
+        sample.chroma >= .065f -> sample
+        accent.chroma >= .065f -> accent
+        else -> ArtworkAmbientPalette.Default.dominant
     }
-    return tint.copy(alpha = high)
+    val floor = source.floor
+    val chroma = source.chroma
+    val saturation = (chroma / source.peak).coerceIn(.58f, .86f)
+    val darkestChannel = ceiling * (1f - saturation)
+    fun channel(value: Float) = darkestChannel + (value - floor) / chroma * (ceiling - darkestChannel)
+    return Color(channel(source.red), channel(source.green), channel(source.blue))
 }

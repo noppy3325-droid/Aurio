@@ -18,7 +18,7 @@ Android 10+　 ·　 オフライン再生　 ·　 オープンソース
 
 | ライブラリ | 再生画面 |
 |:---:|:---:|
-| <img src="docs/screenshots/v021/after/01-library-light.png" width="320" alt="楽曲ライブラリ"> | <img src="docs/screenshots/v024/rev2-artwork-1-navy.png" width="320" alt="ジャケットの色が背景に広がる再生画面"> |
+| <img src="docs/screenshots/v021/after/01-library-light.png" width="320" alt="楽曲ライブラリ"> | <img src="docs/screenshots/v025/rev2-artwork-7-blue-to-coral.png" width="320" alt="ジャケットの上下の色が背景に広がる再生画面"> |
 
 *画面の楽曲名とアートワークはテスト用に生成したものです。*
 

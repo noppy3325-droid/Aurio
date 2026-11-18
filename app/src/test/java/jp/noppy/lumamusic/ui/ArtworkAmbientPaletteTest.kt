@@ -33,14 +33,24 @@ class ArtworkAmbientPaletteTest {
         assertEquals(rose, palette.bottomRight)
     }
 
-    @Test fun `very bright artwork is dimmed for white text while dark art needs no scrim`() {
-        val bright = Color(0xFFFFEAE1)
-        val warm = Color(0xFFD03B22)
-        val scrim = nowPlayingScrim(bright, warm, .12f)
-        val composite = scrim.compositeOver(bright)
+    @Test fun `neutral edges use a colored accent even on white or black covers`() {
+        val fallback = playerAmbientTone(Color.White, Color.LightGray, .39f)
+        val blue = playerAmbientTone(Color.LightGray, Color(0xFF4254C9), .39f)
 
-        assertTrue((Color.White.luminance() + .05f) / (composite.luminance() + .05f) >= 4.5f)
-        assertTrue(composite.red > composite.blue)
-        assertEquals(0f, nowPlayingScrim(Color(0xFF082044), Color.Blue, .12f).alpha, 0f)
+        assertTrue(fallback.blue > fallback.green + .15f)
+        assertEquals(fallback, playerAmbientTone(Color.Black, Color.Gray, .39f))
+        assertTrue(blue.blue > blue.red + .15f)
+    }
+
+    @Test fun `bright colors keep their hue and contrast under the player controls`() {
+        val blue = playerAmbientTone(Color(0xFF5A81C4), Color.Red, .39f)
+        val coral = playerAmbientTone(Color(0xFFF19779), Color.Blue, .31f)
+        val brightBackground = playerAmbientTone(Color.Yellow, Color.Yellow, .39f)
+        val panelBackground = Color.White.copy(alpha = .12f).compositeOver(brightBackground)
+        val contrast = (Color.White.luminance() + .05f) / (panelBackground.luminance() + .05f)
+
+        assertTrue(blue.blue > blue.green && blue.green > blue.red)
+        assertTrue(coral.red > coral.green && coral.green > coral.blue)
+        assertTrue(contrast >= 4.5f)
     }
 }
