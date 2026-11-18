@@ -143,7 +143,7 @@ import java.time.format.DateTimeFormatter
                     else -> {
                         val bottomContentPadding = with(LocalDensity.current) { dockHeightPx.toDp() } + LumaDock.ListClearance
                         val backgroundSemantics = if (playerVisible) Modifier.semantics { hideFromAccessibility() } else Modifier
-                        LiquidBackdropHost(Modifier.fillMaxSize().imePadding().then(backgroundSemantics), content = {
+                        LiquidBackdropHost(Modifier.fillMaxSize().imePadding().then(backgroundSemantics), capture = !playerCoversBars, content = {
                             Box(Modifier.matchParentSize().background(scheme.background))
                             HorizontalPager(
                                 state = pager,

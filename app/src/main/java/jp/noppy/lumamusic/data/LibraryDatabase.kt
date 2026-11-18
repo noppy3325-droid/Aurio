@@ -51,12 +51,61 @@ data class PlaylistEntry(val playlistId: Long, val entryId: String, val trackUri
 @Entity(tableName = "play_history", indices = [Index("playedAt")])
 data class PlayHistory(@PrimaryKey(autoGenerate = true) val id: Long = 0, val trackUri: String, val playedAt: Long)
 
+@Entity(tableName = "track_playback_stats")
+data class TrackPlaybackStats(
+    @PrimaryKey val stableTrackId: String,
+    val validPlayCount: Long,
+    val completedPlayCount: Long,
+    val lastPlayedAt: Long,
+    val firstPlayedAt: Long,
+    val totalAudibleMs: Long,
+)
+
+data class PlaybackUpdate(
+    val trackUri: String,
+    val audibleMs: Long,
+    val validPlay: Boolean,
+    val completed: Boolean,
+    val lastPlayedAt: Long,
+    val firstPlayedAt: Long,
+)
+
 @Dao
 interface LibraryDao {
     @Query("SELECT * FROM play_history ORDER BY playedAt DESC, id DESC LIMIT 1000") fun history(): Flow<List<PlayHistory>>
     @Insert suspend fun insertHistory(entry: PlayHistory)
     @Query("DELETE FROM play_history WHERE id NOT IN (SELECT id FROM play_history ORDER BY playedAt DESC, id DESC LIMIT 1000)") suspend fun trimHistory()
-    @Query("DELETE FROM play_history") suspend fun clearHistory()
+    @Query("DELETE FROM play_history") suspend fun deleteHistoryRows()
+    @Query("DELETE FROM track_playback_stats") suspend fun deletePlaybackStats()
+    @Query("SELECT * FROM track_playback_stats") fun playbackStats(): Flow<List<TrackPlaybackStats>>
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertPlaybackStats(stats: TrackPlaybackStats)
+    @Query("""
+        UPDATE track_playback_stats
+        SET validPlayCount = validPlayCount + :plays,
+            completedPlayCount = completedPlayCount + :completed,
+            totalAudibleMs = totalAudibleMs + :audibleMs,
+            lastPlayedAt = :playedAt
+        WHERE stableTrackId = :trackId
+    """)
+    suspend fun updatePlaybackStats(trackId: String, plays: Int, completed: Int, audibleMs: Long, playedAt: Long)
+
+    @Transaction
+    suspend fun recordPlayback(trackId: String, update: PlaybackUpdate) {
+        if (update.validPlay) {
+            insertPlaybackStats(TrackPlaybackStats(trackId, 0, 0, update.lastPlayedAt, update.firstPlayedAt, 0))
+            insertHistory(PlayHistory(trackUri = update.trackUri, playedAt = update.lastPlayedAt))
+            trimHistory()
+        }
+        updatePlaybackStats(trackId, if (update.validPlay) 1 else 0, if (update.completed) 1 else 0, update.audibleMs, update.lastPlayedAt)
+    }
+
+    @Transaction
+    suspend fun clearHistory() {
+        deleteHistoryRows()
+        deletePlaybackStats()
+    }
+
+    @Query("SELECT * FROM track_folders") fun trackFolders(): Flow<List<TrackFolder>>
     @Query("SELECT DISTINCT t.* FROM tracks t INNER JOIN track_folders f ON t.uri=f.trackUri ORDER BY t.added DESC")
     fun tracks(): Flow<List<Track>>
     @Query("SELECT * FROM folders") fun folders(): Flow<List<MusicFolder>>
@@ -93,8 +142,21 @@ interface LibraryDao {
     @Query("DELETE FROM playlists WHERE id=:id") suspend fun deletePlaylist(id: Long)
 }
 
-@Database(entities = [Track::class, MusicFolder::class, TrackFolder::class, UserTrack::class, MusicPlaylist::class, PlaylistEntry::class, AudioAnalysisCache::class, DspPreset::class, PlayHistory::class], version = 3, exportSchema = true)
+@Database(entities = [Track::class, MusicFolder::class, TrackFolder::class, UserTrack::class, MusicPlaylist::class, PlaylistEntry::class, AudioAnalysisCache::class, DspPreset::class, PlayHistory::class, TrackPlaybackStats::class], version = 4, exportSchema = true)
 abstract class LibraryDatabase : RoomDatabase() { abstract fun library(): LibraryDao }
+
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Legacy rows establish when a track was heard. They have no qualifying duration or completion data.
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS track_playback_stats (
+                stableTrackId TEXT NOT NULL PRIMARY KEY, validPlayCount INTEGER NOT NULL,
+                completedPlayCount INTEGER NOT NULL, lastPlayedAt INTEGER NOT NULL,
+                firstPlayedAt INTEGER NOT NULL, totalAudibleMs INTEGER NOT NULL
+            )
+        """.trimIndent())
+    }
+}
 
 val MIGRATION_2_3 = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {

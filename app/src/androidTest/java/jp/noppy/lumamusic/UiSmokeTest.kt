@@ -175,7 +175,39 @@ class UiSmokeTest {
         generateSequence(node) { it.parent }.take(4).any { it.isSelected }
     }
 
-    private fun fixture(directory: File): Pair<File, List<Track>> {
+    @Test fun pageSwipeAndDirectLensDragUseTheirOwnDirections() {
+        val activity = instrumentation.startActivitySync(
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        )
+        try {
+            eventually("home is selected") { tabSelected("ホーム") }
+            val view = activity.window.decorView
+            fun center(label: String): Pair<Float, Float> {
+                val nodesForLabel = nodes().filter { it.text?.toString() == label }
+                val area = nodesForLabel.map { node -> android.graphics.Rect().also(node::getBoundsInScreen) }
+                    .maxByOrNull { it.centerY() } ?: error("Missing tab: $label")
+                return area.centerX().toFloat() / view.width to area.centerY().toFloat() / view.height
+            }
+            val (homeX, homeY) = center("ホーム")
+            val (libraryX, libraryY) = center("ライブラリ")
+            swipe(activity, homeX, homeY, libraryX, homeY, 380, cancel = true)
+            Thread.sleep(700)
+            eventually("cancelled lens drag stays on home") { tabSelected("ホーム") }
+            swipe(activity, homeX, homeY, libraryX, homeY, 380, frame = "rev2-direct-drag")
+            eventually("right lens drag lands on library") { tabSelected("ライブラリ") }
+            swipe(activity, .79f, .55f, .21f, .55f, 380, frame = "rev2-body-swipe")
+            eventually("left body swipe lands on search") { tabSelected("検索") }
+            val (searchX, searchY) = center("検索")
+            swipe(activity, searchX, searchY, libraryX, searchY, 380)
+            eventually("left lens drag lands on library") { tabSelected("ライブラリ") }
+            swipe(activity, libraryX, libraryY, homeX, libraryY, 380)
+            eventually("left lens drag lands on home") { tabSelected("ホーム") }
+        } finally {
+            main { activity.finish() }
+        }
+    }
+
+    private fun fixture(directory: File, artworkMatrix: Boolean = false): Pair<File, List<Track>> {
         val rate = 44100
         val pcmBytes = rate * 20 * 4
         val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
@@ -183,20 +215,26 @@ class UiSmokeTest {
             .putShort(1).putShort(2).putInt(rate).putInt(rate * 4).putShort(4).putShort(16)
             .put("data".toByteArray()).putInt(pcmBytes)
         val wave = File(directory, "silent-20s.wav").apply { outputStream().use { it.write(header.array()); it.write(ByteArray(pcmBytes)) } }
-        val palette = listOf(0xFF405A73.toInt(), 0xFF89635A.toInt(), 0xFF41605B.toInt(), 0xFF898274.toInt(), 0xFF735779.toInt(), 0xFFAC7B5E.toInt())
-        val names = listOf("Blue Hour", "Evening Light", "静かな海", "Passing Days", "月のあいだ", "First Light")
-        val art = palette.mapIndexed { index, color ->
+        val palette = if (artworkMatrix) listOf(
+            0xFF183D85L to 0xFF0A1A45L, 0xFFE84074L to 0xFFB42042L, 0xFF27A670L to 0xFF065738L,
+            0xFFFFFFFFL to 0xFFF3F1EDL, 0xFF181719L to 0xFF050506L, 0xFFF4C8DCL to 0xFFB9D8EBL,
+            0xFF336FC8L to 0xFFFF8651L,
+        ) else listOf(0xFF405A73L, 0xFF89635AL, 0xFF41605BL, 0xFF898274L, 0xFF735779L, 0xFFAC7B5EL)
+            .map { it to 0xFF121820L }
+        val names = if (artworkMatrix) listOf("Navy", "Rose", "Jade", "Porcelain", "Charcoal", "Pastel", "Blue to coral", "No cover")
+        else listOf("Blue Hour", "Evening Light", "静かな海", "Passing Days", "月のあいだ", "First Light")
+        val art = palette.mapIndexed { index, (top, bottom) ->
             val bitmap = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-            paint.shader = LinearGradient(0f, 0f, 512f, 512f, color, Color.rgb(18, 24, 32), Shader.TileMode.CLAMP)
+            paint.shader = LinearGradient(0f, 0f, 512f, 512f, top.toInt(), bottom.toInt(), Shader.TileMode.CLAMP)
             canvas.drawRect(0f, 0f, 512f, 512f, paint)
             paint.shader = null
             paint.color = Color.argb(44, 255, 255, 255)
             canvas.drawCircle(380f, 150f, 190f, paint)
             paint.color = Color.argb(32, 255, 255, 255)
             canvas.drawCircle(100f, 390f, 180f, paint)
-            paint.color = Color.WHITE
+            paint.color = if (artworkMatrix && index in listOf(3, 5)) Color.rgb(46, 39, 44) else Color.WHITE
             paint.textSize = 36f
             paint.typeface = android.graphics.Typeface.create(context.resources.getFont(jp.noppy.lumamusic.R.font.noto_sans_jp_regular), 400, false)
             canvas.drawText(names[index], 40f, 400f, paint)
@@ -209,18 +247,95 @@ class UiSmokeTest {
         }
         val start = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(1)
         // Private hard links give each row a normal file URI while sharing the silent PCM data.
-        val tracks = (0 until 48).map { index ->
+        val tracks = (0 until if (artworkMatrix) names.size else 48).map { index ->
             val song = File(directory, "silent-$index.wav")
             runCatching { android.system.Os.link(wave.absolutePath, song.absolutePath) }.getOrElse { wave.copyTo(song) }
             val uri = Uri.fromFile(song).toString()
-            val title = if (index == 47) "星をつなぐ 48 — 明け方の青い空が続く場所で / Long Session" else "星をつなぐ ${index + 1}"
+            val title = when {
+                artworkMatrix -> names[index]
+                index == 47 -> "星をつなぐ 48 — 明け方の青い空が続く場所で / Long Session"
+                else -> "星をつなぐ ${index + 1}"
+            }
             val artist = if (index == 47) "Aurio Studio feat. 月のあいだ・静かな海" else "Aurio Studio"
-            Track(uri = uri, title = title, artist = artist, album = names[index % 6], albumArtist = "Aurio Studio",
-                duration = 20000, mime = "audio/wav", sampleRate = rate, bitDepth = 16, channels = 2, artwork = art[index % 6], artworkThumbnail = art[index % 6],
+            val cover = art.getOrNull(index % names.size)
+            Track(uri = uri, title = title, artist = artist, album = names[index % names.size], albumArtist = "Aurio Studio",
+                duration = 20000, mime = "audio/wav", sampleRate = rate, bitDepth = 16, channels = 2, artwork = cover, artworkThumbnail = cover,
                 embeddedLyrics = "[00:00.00]静かな夜に\n[00:05.00]星をつないで\n[00:10.00]明日へ歩く", modified = wave.lastModified(), added = if (index == 0) Long.MIN_VALUE else start + index,
                 size = wave.length(), metadataState = "READY", detailState = "READY")
         }
         return wave to tracks
+    }
+
+    @Test fun artworkScenesFollowTrackChangesAcrossCoverColors() = runBlocking {
+        val id = UUID.randomUUID().toString()
+        val directory = File(context.filesDir, "ui-artwork-$id").apply { mkdirs() }
+        val folder = "luma-artwork-fixture:$id"
+        val (_, tracks) = fixture(directory, artworkMatrix = true)
+        val originalSnapshot = app.settings.snapshot.first()
+        lateinit var future: com.google.common.util.concurrent.ListenableFuture<MediaController>
+        main { future = MediaController.Builder(context, SessionToken(context, ComponentName(context, PlaybackService::class.java))).buildAsync() }
+        val player = future.get(15, TimeUnit.SECONDS)
+        var restorePlayer: (() -> Unit)? = null
+        var activity: Activity? = null
+        try {
+            main {
+                val queue = (0 until player.mediaItemCount).map(player::getMediaItemAt)
+                val index = player.currentMediaItemIndex.coerceAtLeast(0)
+                val position = player.currentPosition
+                val playing = player.playWhenReady
+                val shuffle = player.shuffleModeEnabled
+                restorePlayer = {
+                    player.pause()
+                    if (queue.isEmpty()) player.clearMediaItems() else {
+                        player.setMediaItems(queue, index.coerceIn(queue.indices), position)
+                        player.prepare()
+                    }
+                    player.shuffleModeEnabled = shuffle
+                    player.playWhenReady = playing
+                }
+                player.pause()
+            }
+            app.database.withTransaction {
+                app.library.dao.upsertTracks(tracks)
+                app.library.dao.refs(tracks.map { TrackFolder(it.uri, folder) })
+            }
+            main {
+                player.setMediaItems(tracks.map(Track::mediaItem), 0, 2500)
+                player.shuffleModeEnabled = false
+                player.prepare()
+            }
+            activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+            click(tracks.first().title, tab = true)
+            eventually("expanded Now Playing") { textPresent("プレイヤーを閉じる") }
+            tracks.forEachIndexed { index, track ->
+                main { player.seekTo(index, 2500) }
+                eventually("current artwork for ${track.title}") {
+                    val covers = nodes().mapNotNull { it.contentDescription?.toString() }.filter { it.startsWith("アルバムアート: ") }
+                    textPresent(track.title) && if (track.artwork == null) covers.isEmpty()
+                    else covers == listOf("アルバムアート: ${track.title}")
+                }
+                screenshot("rev2-artwork-${index + 1}-${track.title.lowercase().replace(' ', '-')}")
+            }
+            main { listOf(1, 5, 3, 0).forEach { player.seekTo(it, 2500) } }
+            eventually("latest artwork after successive track changes") {
+                textPresent("アルバムアート: Navy") && !textPresent("アルバムアート: Porcelain")
+            }
+        } finally {
+            main {
+                restorePlayer?.invoke()
+                activity?.finish()
+                player.release()
+            }
+            app.database.withTransaction {
+                app.library.dao.clearRefs(folder)
+                tracks.forEach { track ->
+                    app.database.openHelper.writableDatabase.execSQL("DELETE FROM tracks WHERE uri=?", arrayOf(track.uri))
+                    app.database.openHelper.writableDatabase.execSQL("DELETE FROM audio_analysis WHERE uri=?", arrayOf(track.uri))
+                }
+            }
+            app.settings.saveSnapshot(originalSnapshot)
+            directory.deleteRecursively()
+        }
     }
 
     @Test fun routesSeekThemesAndStandbyPreserveExistingData() = runBlocking {
@@ -278,6 +393,7 @@ class UiSmokeTest {
             activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
             orientation = activity!!.requestedOrientation
             eventually("home navigation is visible") { tabSelected("ホーム") }
+            screenshot("rev2-home")
             click("ライブラリ", tab = true)
             eventually("fixture library") {
                 if (textPresent("確認してください")) runCatching { click("閉じる") }
@@ -345,9 +461,13 @@ class UiSmokeTest {
                 } ?: error("Library tab is not visible")
             libraryTab.getBoundsInScreen(navigationBounds)
             val navigationY = navigationBounds.centerY().toFloat() / activity.window.decorView.height
-            swipe(activity, .72f, navigationY, .29f, navigationY, 500, "19-bottom-navigation-drag")
+            val libraryX = navigationBounds.centerX().toFloat() / activity.window.decorView.width
+            swipe(activity, libraryX, navigationY, libraryX + .18f, navigationY, 500, "19-bottom-navigation-drag")
             eventually("dragging the bottom navigation moves to search") { tabSelected("検索") }
-            swipe(activity, .22f, navigationY, .65f, navigationY, 500)
+            val searchTab = nodes().filter { it.text?.toString() == "検索" || it.contentDescription?.toString() == "検索" }
+                .maxByOrNull { bounds(it).centerY() } ?: error("Search tab is not visible")
+            val searchX = bounds(searchTab).centerX().toFloat() / activity.window.decorView.width
+            swipe(activity, searchX, navigationY, searchX - .18f, navigationY, 500)
             eventually("dragging the bottom navigation back restores library") { tabSelected("ライブラリ") }
             swipe(activity, .82f, .51f, .17f, .51f, frame = "15-tab-drag")
             eventually("search tab settles after horizontal swipe") { tabSelected("検索") }

@@ -16,6 +16,11 @@ import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class GlassSpikeTest {
+    private fun AccessibilityNodeInfo.isVerticalScroller() = actionList.any {
+        it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id ||
+            it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
+    }
+
     private fun launchDemo() {
         val i=InstrumentationRegistry.getInstrumentation()
         val a=i.startActivitySync(Intent(i.targetContext,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)) as MainActivity
@@ -30,11 +35,11 @@ class GlassSpikeTest {
         fun find(predicate:(AccessibilityNodeInfo)->Boolean):AccessibilityNodeInfo {repeat(30){nodes().firstOrNull(predicate)?.let{return it};Thread.sleep(100)};error("Accessibility target missing: ${nodes().mapNotNull{it.text}}")}
         fun shell(cmd:String)=android.os.ParcelFileDescriptor.AutoCloseInputStream(i.uiAutomation.executeShellCommand(cmd)).bufferedReader().use{it.readText()}
         fun scroll(action:Int) {
-            for(attempt in 0 until 20){if(find{it.isScrollable}.performAction(action)){Thread.sleep(1000);return};Thread.sleep(100)}
+            for(attempt in 0 until 20){if(find{it.isVerticalScroller()}.performAction(action)){Thread.sleep(1000);return};Thread.sleep(100)}
             fail("Scroll action $action did not dispatch")
         }
         for(label in listOf("バランス","オフ")){
-            for(page in 0 until 8){if(!find{it.isScrollable}.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD))break;Thread.sleep(1000)}
+            for(page in 0 until 8){if(!find{it.isVerticalScroller()}.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD))break;Thread.sleep(1000)}
             var button=find{it.text?.toString()==label};while(!button.isClickable)button=button.parent
             assertTrue(button.performAction(AccessibilityNodeInfo.ACTION_CLICK));Thread.sleep(700)
             repeat(2){scroll(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)}
@@ -61,7 +66,7 @@ class GlassSpikeTest {
         }
         fun shot(name:String) { val b=i.uiAutomation.takeScreenshot()?:error("No screenshot");File(ctx.getExternalFilesDir(null),"$name.png").outputStream().use{b.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};b.recycle() }
         shot("glass-spike-before")
-        val scroll=nodes().firstOrNull{it.isScrollable}?:error("No scroll semantics")
+        val scroll=nodes().firstOrNull{it.isVerticalScroller()}?:error("No vertical scroll semantics")
         assertTrue("Accessibility scroll must dispatch",scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))
         Thread.sleep(700);shot("glass-spike-after")
         for(label in listOf("高品質","軽量","オフ","バランス")) {

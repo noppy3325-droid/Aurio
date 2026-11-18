@@ -13,8 +13,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -38,7 +38,7 @@ internal fun PlayerScreen(
     close: () -> Unit,
     sound: () -> Unit,
     sheet: PlayerSheetState,
-    hero: Painter?,
+    artworkScene: PlayerArtworkScene?,
     miniSurface: Color,
     wide: Boolean,
     panel: String,
@@ -51,20 +51,25 @@ internal fun PlayerScreen(
     }.orEmpty()
     val outputState by vm.output.collectAsStateWithLifecycle()
     var menu by rememberSaveable { mutableStateOf(false) }
+    val detailsHeight = remember { mutableIntStateOf(0) }
     val playerColors = remember {
         darkColorScheme(
             background = Color(0xFF161319),
             surface = Color(0xFF201C23),
             onBackground = Color.White,
             onSurface = Color.White,
-            onSurfaceVariant = Color(0xFFC9C4CE),
-            primary = Color(0xFFF3ACC2)
+            onSurfaceVariant = Color(0xFFECE6EC),
+            primary = Color(0xFFF8C5D5)
         )
     }
     MaterialTheme(colorScheme = playerColors) {
         LiquidBackdropHost(
             Modifier.fillMaxSize(),
-            content = { PlayerArtworkBackdrop(sheet, hero, track?.artwork ?: playback.artwork, title, miniSurface, wide, panel != "player") },
+            content = {
+                PlayerArtworkBackdrop(sheet, artworkScene, title, miniSurface, wide, panel != "player") {
+                    detailsHeight.intValue
+                }
+            },
             overlay = {
                 CompositionLocalProvider(LocalContentColor provides Color.White) {
                     BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -119,7 +124,7 @@ internal fun PlayerScreen(
                                     Icon(if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, if (favorite) "お気に入りを解除" else "お気に入りに登録", tint = if (favorite) playerColors.primary else Color.White)
                                 }
                             }
-                            SeekControls(vm, playback, compact = true)
+                            SeekControls(vm, playback, compact = true, artworkBackdrop = true)
                             PlaybackButtons(vm, playback, compact = compact)
                             VolumeControl(bitPerfect = outputState.bitPerfectVolumeRestricted)
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -152,7 +157,9 @@ internal fun PlayerScreen(
                                 // The noninteractive artwork fills the safe area, including both margins.
                                 panelContent(if (panel == "player") panelArea else panelArea.then(insetChrome))
                                 Column(
-                                    insetChrome.heightIn(max = compactDetailsHeight).verticalScroll(rememberScrollState()),
+                                    insetChrome.heightIn(max = compactDetailsHeight)
+                                        .onSizeChanged { detailsHeight.intValue = it.height }
+                                        .verticalScroll(rememberScrollState()),
                                     content = details
                                 )
                             }
@@ -172,7 +179,7 @@ internal fun PlayerScreen(
     }
 }
 
-@Composable fun SeekControls(vm: LumaViewModel, playback: PlaybackUi, compact: Boolean = false) {
+@Composable fun SeekControls(vm: LumaViewModel, playback: PlaybackUi, compact: Boolean = false, artworkBackdrop: Boolean = false) {
     val live by vm.playback.state.collectAsStateWithLifecycle()
     var dragged by remember(live.mediaId, live.index) { mutableStateOf<Float?>(null) }
     val duration = live.duration.toFloat().coerceAtLeast(1f)
@@ -181,6 +188,8 @@ internal fun PlayerScreen(
         key(live.mediaId, live.index) {
             LumaSlider(
                 position, { dragged = it }, range = 0f..duration, enabled = live.duration > 0,
+                trackAlpha = if (artworkBackdrop && live.duration > 0) .48f else .20f,
+                showThumb = artworkBackdrop,
                 onFinished = { dragged?.let { vm.playback.seek(it.toLong()) }; dragged = null }
             )
         }

@@ -4,10 +4,14 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import jp.noppy.lumamusic.data.LibraryDao
 import jp.noppy.lumamusic.data.LibraryDatabase
 import jp.noppy.lumamusic.data.MIGRATION_1_2
 import jp.noppy.lumamusic.data.MIGRATION_2_3
+import jp.noppy.lumamusic.data.MIGRATION_3_4
 import jp.noppy.lumamusic.data.PlayHistory
+import jp.noppy.lumamusic.data.PlaybackUpdate
+import jp.noppy.lumamusic.data.stableTrackId
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
@@ -44,7 +48,8 @@ class LibraryMigrationTest {
             old.execSQL("INSERT INTO playlist_entries(playlistId,entryId,trackUri,position) VALUES(7,'entry','fixture',0)")
             old.version=1
         }
-        val upgraded=Room.databaseBuilder(context,LibraryDatabase::class.java,name).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+        val upgraded=Room.databaseBuilder(context,LibraryDatabase::class.java,name)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
         try {
             upgraded.openHelper.writableDatabase
             val dao=upgraded.library()
@@ -60,5 +65,54 @@ class LibraryMigrationTest {
             dao.insertHistory(PlayHistory(trackUri = "fixture", playedAt = 12345))
             assertEquals("fixture", dao.history().first().single().trackUri)
         } finally { upgraded.close(); context.deleteDatabase(name) }
+    }
+
+    @Test fun upgradesLegacyHistoryAndDurablyAggregatesNewPlays() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val name = "migration-${UUID.randomUUID()}.db"
+        suspend fun withDatabase(check: suspend (LibraryDao) -> Unit) {
+            val database = Room.databaseBuilder(context, LibraryDatabase::class.java, name)
+                .addMigrations(MIGRATION_3_4).build()
+            try {
+                check(database.library())
+            } finally {
+                database.close()
+            }
+        }
+        val uri = "content://provider/tree/first/document/opaque"
+        val moved = "content://provider/tree/second/document/opaque"
+        val id = stableTrackId(uri)
+        assertEquals(id, stableTrackId(moved))
+        try {
+            withDatabase { dao ->
+                dao.insertHistory(PlayHistory(trackUri = uri, playedAt = 12_000))
+            }
+            SQLiteDatabase.openDatabase(context.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use {
+                // v4 adds exactly one table to the complete v3 schema.
+                it.execSQL("DROP TABLE track_playback_stats")
+                it.version = 3
+            }
+            withDatabase { dao ->
+                assertEquals(uri, dao.history().first().single().trackUri)
+                assertTrue(dao.playbackStats().first().isEmpty())
+                dao.recordPlayback(id, PlaybackUpdate(moved, 45_000, true, false, 90_000, 45_000))
+                dao.recordPlayback(id, PlaybackUpdate(moved, 35_000, false, true, 125_000, 45_000))
+                dao.recordPlayback(id, PlaybackUpdate(moved, 45_000, true, false, 185_000, 140_000))
+            }
+            withDatabase { dao ->
+                val stats = dao.playbackStats().first().single()
+                assertEquals(2L, stats.validPlayCount)
+                assertEquals(1L, stats.completedPlayCount)
+                assertEquals(125_000L, stats.totalAudibleMs)
+                assertEquals(45_000L, stats.firstPlayedAt)
+                assertEquals(185_000L, stats.lastPlayedAt)
+                assertEquals(listOf(moved, moved, uri), dao.history().first().map { it.trackUri })
+                dao.clearHistory()
+                assertTrue(dao.history().first().isEmpty())
+                assertTrue(dao.playbackStats().first().isEmpty())
+            }
+        } finally {
+            context.deleteDatabase(name)
+        }
     }
 }

@@ -231,7 +231,7 @@ internal fun PlayerSheet(
     val artwork = track?.artwork ?: playback.artwork
     val miniSurface = MaterialTheme.colorScheme.surface
     val miniText = MaterialTheme.colorScheme.onSurface
-    val hero = rememberPlayerArtwork(artwork, reducedMotion)
+    val artworkScene = rememberPlayerArtwork(artwork)
     var panel by rememberSaveable { mutableStateOf("player") }
     BoxWithConstraints(modifier.onGloballyPositioned { sheet.layout(it.positionInRoot(), it.size.height) }) {
         if (!sheet.active) return@BoxWithConstraints
@@ -250,7 +250,7 @@ internal fun PlayerSheet(
         }.playerSheetDrag(sheet, opening = null)
             .then(if (sheet.expanded) Modifier else Modifier.clearAndSetSemantics {})
         Box(panelModifier) {
-            PlayerScreen(vm, playback, track, favorite, standby, output, sheet::close, sound, sheet, hero, miniSurface, wide, panel) { panel = it }
+            PlayerScreen(vm, playback, track, favorite, standby, output, sheet::close, sound, sheet, artworkScene, miniSurface, wide, panel) { panel = it }
             // The miniature text follows its starting plate before the expanded
             // information and transport become visible. Artwork stays in one layer.
             Row(

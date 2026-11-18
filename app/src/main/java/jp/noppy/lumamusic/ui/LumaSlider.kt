@@ -23,7 +23,18 @@ import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.dp
 
 /** A 3dp visual track inside a 48dp gesture/assistive-technology target. */
-@Composable fun LumaSlider(value: Float, onValueChange: (Float) -> Unit, modifier: Modifier = Modifier, range: ClosedFloatingPointRange<Float> = 0f..1f, enabled: Boolean = true, label: String = "再生位置", onFinished: () -> Unit = {}) {
+@Composable
+fun LumaSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    range: ClosedFloatingPointRange<Float> = 0f..1f,
+    enabled: Boolean = true,
+    label: String = "再生位置",
+    trackAlpha: Float = .20f,
+    showThumb: Boolean = false,
+    onFinished: () -> Unit = {},
+) {
     val currentValue by rememberUpdatedState(value)
     val change by rememberUpdatedState(onValueChange)
     val finish by rememberUpdatedState(onFinished)
@@ -60,7 +71,12 @@ import androidx.compose.ui.unit.dp
         val trackHeight = (if (pressed) 5.dp else 3.dp).toPx()
         val top = (size.height - trackHeight) / 2
         val fraction = ((currentValue - range.start) / span).coerceIn(0f, 1f)
-        drawRoundRect(color.copy(alpha = .2f), Offset(0f, top), Size(size.width, trackHeight), CornerRadius(trackHeight))
+        drawRoundRect(color.copy(alpha = trackAlpha), Offset(0f, top), Size(size.width, trackHeight), CornerRadius(trackHeight))
         drawRoundRect(color, Offset(0f, top), Size(size.width * fraction, trackHeight), CornerRadius(trackHeight))
+        if (showThumb && enabled) {
+            val radius = minOf((if (pressed) 5.dp else 4.dp).toPx(), size.width / 2f)
+            val x = (size.width * fraction).coerceIn(radius, size.width - radius)
+            drawCircle(color, radius, Offset(x, size.height / 2f))
+        }
     }
 }

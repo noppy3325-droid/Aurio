@@ -4,10 +4,12 @@ package jp.noppy.lumamusic.playback
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.net.Uri
 import android.os.Bundle
 import android.os.Process
+import android.os.SystemClock
 import androidx.media3.common.*
 import androidx.media3.exoplayer.*
 import androidx.media3.exoplayer.audio.*
@@ -49,8 +51,10 @@ class PlaybackService : MediaSessionService() {
     private var libraryIndex: Map<String, Track> = emptyMap()
     private var lastScheduledSnapshot: PlaybackSnapshot? = null
     private val queueEdits = Mutex()
-    private var historyListeningMs = 0L
-    private var historyRecorded = false
+    private val audioManager by lazy { getSystemService(AudioManager::class.java) }
+    private val fixedStreamVolume by lazy { audioManager?.isVolumeFixed == true }
+    private var listening: ListeningSession? = null
+    private var historyGeneration = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -110,13 +114,37 @@ class PlaybackService : MediaSessionService() {
         })
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
+                if (events.containsAny(
+                        Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_POSITION_DISCONTINUITY,
+                        Player.EVENT_IS_PLAYING_CHANGED, Player.EVENT_PLAYBACK_STATE_CHANGED,
+                        Player.EVENT_PLAYBACK_PARAMETERS_CHANGED, Player.EVENT_VOLUME_CHANGED, Player.EVENT_TIMELINE_CHANGED
+                    )
+                ) sampleListening()
                 if (events.contains(Player.EVENT_TIMELINE_CHANGED)) refreshQueueMetadata()
                 if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_PLAY_WHEN_READY_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED, Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_POSITION_DISCONTINUITY)) save()
                 else if (events.contains(Player.EVENT_TIMELINE_CHANGED)) save(queueOnly = true)
             }
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                resetListeningAfterClear()
+                val current = listening ?: return
+                if (oldPosition.mediaItem?.mediaId != current.trackUri) return
+                val now = System.currentTimeMillis()
+                val naturalEnd = reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION
+                val replaced = oldPosition.mediaItemIndex != newPosition.mediaItemIndex ||
+                    oldPosition.mediaItem?.mediaId != newPosition.mediaItem?.mediaId ||
+                    reason == Player.DISCONTINUITY_REASON_REMOVE
+                app.playbackHistory.record(current.sample(
+                    SystemClock.elapsedRealtime(), oldPosition.positionMs, now, false, 1f,
+                    isOutputEnabled = isMediaStreamAudible(),
+                ))
+                if (naturalEnd || replaced) {
+                    app.playbackHistory.record(current.finish(now, naturalEnd))
+                    listening = null
+                } else {
+                    current.seek(newPosition.positionMs, oldPosition.positionMs)
+                }
+            }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                historyListeningMs = 0L
-                historyRecorded = false
                 retryUsed = false
                 app.output.newSource()
                 DspRuntime.source(mediaItem?.mediaId)
@@ -149,27 +177,45 @@ class PlaybackService : MediaSessionService() {
             }
         }
         scope.launch { while (isActive) { delay(5000); save() } }
-        scope.launch {
-            var last = android.os.SystemClock.elapsedRealtime()
-            while (isActive) {
-                delay(1000)
-                val now = android.os.SystemClock.elapsedRealtime()
-                val elapsed = (now - last).coerceIn(0, 1100)
-                last = now
-                val uri = player.currentMediaItem?.mediaId
-                if (player.isPlaying && !historyRecorded && uri != null) {
-                    historyListeningMs += elapsed
-                    val threshold = if (player.duration > 0) (player.duration / 2).coerceIn(1000, 10000) else 10000
-                    if (historyListeningMs >= threshold) {
-                        historyRecorded = true
-                        val playedAt = System.currentTimeMillis()
-                        scope.launch(Dispatchers.IO) {
-                            app.library.dao.insertHistory(PlayHistory(trackUri = uri, playedAt = playedAt))
-                            app.library.dao.trimHistory()
-                        }
-                    }
-                }
-            }
+        scope.launch { while (isActive) { delay(1000); sampleListening() } }
+    }
+
+    private fun resetListeningAfterClear() {
+        val generation = app.playbackHistory.generation.value
+        if (generation != historyGeneration) {
+            listening = null
+            historyGeneration = generation
+        }
+    }
+
+    private fun isMediaStreamAudible(): Boolean {
+        val audio = audioManager ?: return true
+        return fixedStreamVolume || (!audio.isStreamMute(AudioManager.STREAM_MUSIC) &&
+            audio.getStreamVolume(AudioManager.STREAM_MUSIC) > 0)
+    }
+
+    private fun sampleListening(releasing: Boolean = false) {
+        resetListeningAfterClear()
+        val now = System.currentTimeMillis()
+        val uri = player.currentMediaItem?.mediaId?.takeIf { it.isNotBlank() }
+        val audible = player.isPlaying && player.volume > 0f
+        if (listening?.trackUri != uri) {
+            app.playbackHistory.record(listening?.finish(now, naturalEnd = false))
+            listening = null
+        }
+        if (listening == null && uri != null && audible && !releasing) {
+            listening = ListeningSession(uri, player.currentPosition, player.duration)
+        }
+        val current = listening ?: return
+        if (player.duration > 0) current.durationMs = player.duration
+        app.playbackHistory.record(current.sample(
+            SystemClock.elapsedRealtime(), player.currentPosition, now, audible, player.playbackParameters.speed,
+            isOutputEnabled = isMediaStreamAudible(),
+        ))
+        val ended = player.playbackState == Player.STATE_ENDED
+        if (ended || releasing) {
+            app.playbackHistory.record(current.finish(now, naturalEnd = ended))
+            listening = null
         }
     }
 
@@ -315,6 +361,7 @@ class PlaybackService : MediaSessionService() {
     }
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
     override fun onDestroy() {
+        if (::player.isInitialized) sampleListening(releasing = true)
         scope.cancel()
         if (::player.isInitialized && (restored || player.mediaItemCount > 0)) {
             val value = snapshot()
