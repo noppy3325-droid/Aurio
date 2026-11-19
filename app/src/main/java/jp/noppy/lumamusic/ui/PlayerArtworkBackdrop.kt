@@ -38,10 +38,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.ScaleFactor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -76,6 +76,7 @@ internal class PlayerArtworkScene(
 internal class ArtworkAmbient(
     val palette: ArtworkAmbientPalette,
     val diffusion: ImageBitmap?,
+    val headerLight: Float = 0f,
 ) {
     companion object {
         val Default = ArtworkAmbient(ArtworkAmbientPalette.Default, null)
@@ -149,22 +150,42 @@ private suspend fun loadArtworkAmbient(context: Context, loader: ImageLoader, ar
     }
     val palette = ArtworkAmbientPalette.fromPixels(pixels, width, height, dominant)
     val accent = palette.accent
-    // Box-average a small grid once. Bilinear sampling of this grid gives a wide blur
-    // across the entire canvas on API 29+, with no full resolution blur per frame.
-    val columns = minOf(10, width)
-    val rows = minOf(10, height)
+    // A bright patch behind the clock or menu can disappear in an average for
+    // the entire top edge. Use the brightest of several small areas instead.
+    val headerLight = (0 until 12).maxOf { index ->
+        val x = index % 6
+        val y = index / 6
+        regionColor(
+            pixels, width, width * x / 6, height * y / 8,
+            width * (x + 1) / 6, (height * (y + 1) / 8).coerceAtLeast(1),
+            palette.topLeft,
+        ).luminance()
+    }
+    // Sample overlapping patches once, then stretch this texture behind the photo
+    // and controls. The lower half follows the bottom of the photo and softens
+    // back towards the middle so the color continues past the feathered edge.
+    val columns = 16
+    val rows = 20
     val softPixels = IntArray(columns * rows) { index ->
-        val x = index % columns
-        val y = index / columns
+        val x = (index % columns).toFloat() / (columns - 1)
+        val y = (index / columns).toFloat() / (rows - 1)
+        val curve = 1f - 1.55f * y
+        val imageY = 1f - curve * curve
+        val centerX = (x * (width - 1)).roundToInt()
+        val centerY = (imageY * (height - 1)).roundToInt()
+        val radiusX = (width * (.12f + .07f * y)).roundToInt()
+        val radiusY = (height * (.12f + .08f * y)).roundToInt()
         val sample = regionColor(
-            pixels, width, x * width / columns, y * height / rows,
-            (x + 1) * width / columns, (y + 1) * height / rows, dominant,
+            pixels, width,
+            (centerX - radiusX).coerceAtLeast(0), (centerY - radiusY).coerceAtLeast(0),
+            (centerX + radiusX + 1).coerceAtMost(width), (centerY + radiusY + 1).coerceAtMost(height),
+            dominant,
         )
-        val ceiling = .39f - .10f * (y.toFloat() / rows)
+        val ceiling = .39f - .14f * y * y
         playerAmbientTone(sample, accent, ceiling).toArgb()
     }
     val diffusion = Bitmap.createBitmap(softPixels, columns, rows, Bitmap.Config.ARGB_8888).asImageBitmap()
-    return ArtworkAmbient(palette, diffusion).also { artworkAmbientCache.put(artwork, it) }
+    return ArtworkAmbient(palette, diffusion, headerLight).also { artworkAmbientCache.put(artwork, it) }
 }
 
 @Composable
@@ -231,94 +252,69 @@ private fun PlayerArtworkSceneLayer(
     val accent = remember(palette) { palette.accent }
     val upperEdge = lerp(palette.topLeft, palette.topRight, .5f)
     val lowerEdge = lerp(palette.bottomLeft, palette.bottomRight, .5f)
-    val top = playerAmbientTone(upperEdge, accent, .39f)
-    val bottom = playerAmbientTone(lowerEdge, accent, .31f)
-    val heroScale = remember(sheet) {
-        object : ContentScale {
-            override fun computeScaleFactor(srcSize: Size, dstSize: Size): ScaleFactor {
-                val crop = ContentScale.Crop.computeScaleFactor(srcSize, dstSize).scaleX
-                val fit = ContentScale.Fit.computeScaleFactor(srcSize, dstSize).scaleX
-                val scale = androidx.compose.ui.util.lerp(crop, minOf(crop, fit * 1.08f), sheet.progress)
-                return ScaleFactor(scale, scale)
-            }
-        }
-    }
+    val top = playerAmbientTone(upperEdge, accent, .30f)
+    val bottom = playerAmbientTone(lowerEdge, accent, .25f)
+    val headerShadeAlpha = .26f + .57f * ((scene.ambient.headerLight - .04f) / .42f).coerceIn(0f, 1f)
+    val heroAlpha = if (alternatePanel) .12f else 1f
     Box(modifier.fillMaxSize().background(miniSurface)) {
         Box(Modifier.fillMaxSize().drawWithCache {
             val field = Brush.verticalGradient(
                 0f to top,
-                .40f to playerAmbientTone(palette.dominant, accent, .39f),
-                .73f to bottom,
-                1f to playerAmbientTone(lowerEdge, accent, .23f),
+                .48f to playerAmbientTone(palette.dominant, accent, .37f),
+                1f to bottom,
             )
             val diffusionSize = IntSize(size.width.roundToInt(), size.height.roundToInt())
-            val radius = (size.maxDimension * .62f).coerceAtLeast(1f)
-            val cornerHues = listOf(
-                playerAmbientTone(palette.topLeft, accent, .39f) to Offset(0f, 0f),
-                playerAmbientTone(palette.topRight, accent, .39f) to Offset(size.width, 0f),
-                playerAmbientTone(palette.bottomLeft, accent, .33f) to Offset(0f, size.height * .76f),
-                playerAmbientTone(palette.bottomRight, accent, .33f) to Offset(size.width, size.height * .76f),
-            )
-            val accents = cornerHues.map { (color, center) ->
-                Brush.radialGradient(listOf(color.copy(alpha = .60f), color.copy(alpha = 0f)), center, radius)
-            }
             onDrawBehind {
                 val progress = sheet.progress
                 if (progress > 0f) {
-                    drawRect(field, alpha = progress)
-                    scene.ambient.diffusion?.let {
-                        drawImage(it, dstSize = diffusionSize, alpha = .38f * progress, filterQuality = FilterQuality.Low)
+                    val ambientAlpha = progress * (2f - progress)
+                    val diffusion = scene.ambient.diffusion
+                    if (diffusion == null) {
+                        drawRect(field, alpha = ambientAlpha)
+                    } else {
+                        drawImage(diffusion, dstSize = diffusionSize, alpha = ambientAlpha, filterQuality = FilterQuality.Low)
                     }
-                    accents.forEach { drawRect(it, alpha = progress) }
                 }
             }
         })
         Box(
             Modifier.morphBounds { width, height ->
-                val mini = sheet.miniInHost() ?: Rect(0f, height * .85f, width, height)
-                val edge = 42.dp.toPx()
-                val start = Offset(mini.left + 10.dp.toPx(), mini.center.y - edge / 2)
+                val start = sheet.miniArtworkInHost() ?: run {
+                    val mini = sheet.miniInHost() ?: Rect(0f, height * .85f, width, height)
+                    val edge = 42.dp.toPx()
+                    Rect(Offset(mini.left + 10.dp.toPx(), mini.center.y - edge / 2), Size(edge, edge))
+                }
                 val end = if (wide) {
                     Rect(0f, 0f, width * .50f, height)
                 } else {
-                    // Keep the original pixels between the two control areas. The
-                    // header and detail rows sit entirely on the graded field.
-                    val imageTop = safeDrawing.getTop(this) + 48.dp.toPx()
-                    val detailsTop = height - safeDrawing.getBottom(this) - detailsHeight()
-                    val imageBottom = minOf(height * .72f, imageTop + width * 1.08f, detailsTop)
-                    Rect(0f, imageTop, width, maxOf(imageTop, imageBottom))
+                    val details = detailsHeight().takeIf { it > 0 }?.toFloat() ?: height * .42f
+                    val detailsTop = (height - safeDrawing.getBottom(this) - details).coerceAtLeast(0f)
+                    // Leave the controls on the graded texture even when text size
+                    // or the device's insets leave little space for the photo.
+                    Rect(0f, 0f, width, minOf(height * .72f, width * 1.10f, detailsTop))
                 }
-                interpolateBounds(Rect(start, Size(edge, edge)), end, sheet.progress)
+                interpolateBounds(start, end, sheet.progress)
             }.graphicsLayer {
                 clip = true
                 shape = RoundedCornerShape((10f * (1f - sheet.progress)).dp)
                 compositingStrategy = CompositingStrategy.Offscreen
             }.drawWithCache {
                 if (size.minDimension <= 0f) return@drawWithCache onDrawWithContent { drawContent() }
-                val intrinsic = scene.hero?.intrinsicSize ?: Size.Unspecified
-                val source = intrinsic.takeIf { it != Size.Unspecified && it.width > 0f && it.height > 0f } ?: size
-                val scale = heroScale.computeScaleFactor(source, size).scaleX
-                val drawnHeight = minOf(source.height * scale, size.height)
-                val topStop = ((size.height - drawnHeight) / (2f * size.height)).coerceIn(0f, .5f)
-                val span = (drawnHeight / size.height).coerceIn(.01f, 1f - topStop)
-                val clear = Color.Transparent
-                val opaque = Color.Black
                 val mask = if (wide) {
-                    val drawnWidth = minOf(source.width * scale, size.width)
-                    val start = ((size.width - drawnWidth) / (2f * size.width)).coerceIn(0f, .5f)
-                    val widthFraction = (drawnWidth / size.width).coerceIn(.01f, 1f - start)
-                    Brush.horizontalGradient(
-                        (start + .72f * widthFraction) to clear,
-                        (start + widthFraction) to opaque,
-                    )
+                    Brush.horizontalGradient(.64f to Color.Transparent, 1f to Color.Black)
                 } else {
                     Brush.verticalGradient(
-                        topStop to opaque,
-                        (topStop + .16f * span) to clear,
-                        (topStop + .78f * span) to clear,
-                        (topStop + span) to opaque,
+                        .64f to Color.Transparent,
+                        .86f to Color.Black.copy(alpha = .55f),
+                        1f to Color.Black,
                     )
                 }
+                val statusAndHeader = safeDrawing.getTop(this) + (if (wide) 8.dp else 48.dp).toPx()
+                val headerShade = Brush.verticalGradient(
+                    colors = listOf(top.copy(alpha = headerShadeAlpha), top.copy(alpha = 0f)),
+                    startY = statusAndHeader,
+                    endY = statusAndHeader + 68.dp.toPx(),
+                )
                 val miniFill = Brush.linearGradient(listOf(top, bottom))
                 onDrawWithContent {
                     val progress = sheet.progress
@@ -326,7 +322,10 @@ private fun PlayerArtworkSceneLayer(
                     if (plateOpacity > 0f) drawRect(miniFill, alpha = plateOpacity)
                     drawContent()
                     val feather = ((progress - .08f) / .92f).coerceIn(0f, 1f)
-                    if (feather > 0f) drawRect(mask, alpha = feather, blendMode = BlendMode.DstOut)
+                    if (feather > 0f) {
+                        if (scene.hero != null) drawRect(headerShade, alpha = feather * heroAlpha)
+                        drawRect(mask, alpha = feather, blendMode = BlendMode.DstOut)
+                    }
                 }
             },
             contentAlignment = Alignment.Center,
@@ -335,7 +334,9 @@ private fun PlayerArtworkSceneLayer(
             if (hero != null) {
                 Image(
                     hero, title?.let { "アルバムアート: " + it }, Modifier.fillMaxSize(),
-                    contentScale = heroScale, alpha = if (alternatePanel) .12f else 1f,
+                    alignment = if (wide) Alignment.Center else Alignment.TopCenter,
+                    contentScale = ContentScale.Crop,
+                    alpha = heroAlpha,
                 )
             } else {
                 Icon(

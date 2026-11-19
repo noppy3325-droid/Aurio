@@ -6,8 +6,8 @@ android {
         applicationId = "jp.noppy.lumamusic"
         minSdk = 29
         targetSdk = 37
-        versionCode = 25
-        versionName = "0.25"
+        versionCode = 26
+        versionName = "0.26"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true }

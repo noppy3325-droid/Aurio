@@ -29,6 +29,8 @@ internal object LumaDock {
     val ListClearance = 8.dp
     const val MiniRadius = 24
     const val NavigationRadius = 32
+    const val MiniArtistHideAt = .84f
+    const val MiniNextHideAt = .52f
     val GlassHighlight = Highlight.Ambient.copy(alpha = .52f)
 }
 // Fixed official faces avoid OEMs ignoring the weight axis of a variable resource font.

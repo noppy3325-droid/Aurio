@@ -314,15 +314,21 @@ class UiSmokeTest {
                     textPresent(track.title) && if (track.artwork == null) covers.isEmpty()
                     else covers == listOf("アルバムアート: ${track.title}")
                 }
-                screenshot("rev2-artwork-${index + 1}-${track.title.lowercase().replace(' ', '-')}")
+                screenshot("v054-artwork-${index + 1}-${track.title.lowercase().replace(' ', '-')}")
                 if (track.title in listOf("Porcelain", "Charcoal", "Blue to coral")) {
                     val image = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
                     try {
                         val gutterX = (image.width * .975f).toInt()
-                        for (heightFraction in listOf(.035f, .82f, .965f)) {
+                        val header = image.getPixel(gutterX, (image.height * .035f).toInt())
+                        assertTrue("${track.title} header is too light for white icons", Color.luminance(header) <= .185f)
+                        val minimumColorDifference = if (track.title == "Charcoal") 10 else 16
+                        for (heightFraction in listOf(.82f, .965f)) {
                             val color = image.getPixel(gutterX, (image.height * heightFraction).toInt())
                             val channels = listOf(Color.red(color), Color.green(color), Color.blue(color))
-                            assertTrue("${track.title} background lost its color at y=$heightFraction: $channels", channels.max() - channels.min() >= 16)
+                            assertTrue("${track.title} background lost its color at y=$heightFraction: $channels", channels.max() - channels.min() >= minimumColorDifference)
+                            if (track.title == "Blue to coral") {
+                                assertTrue("The header and controls should use different parts of the artwork", Color.blue(header) > Color.red(header) && Color.red(color) > Color.blue(color))
+                            }
                         }
                     } finally {
                         image.recycle()
@@ -413,6 +419,34 @@ class UiSmokeTest {
                 textPresent(top.title)
             }
             screenshot("01-library-light")
+            val density = context.resources.displayMetrics
+            if (density.widthPixels / density.density >= 368f && context.resources.configuration.fontScale <= 1.3f) {
+                fun dockBounds(label: String) = nodes().filter {
+                    it.text?.toString() == label || it.contentDescription?.toString() == label
+                }.map { android.graphics.Rect().also(it::getBoundsInScreen) }.maxByOrNull { it.centerY() }
+                val artLabel = "アルバムアート: ${top.title}"
+                fun dockIsOneRow(): Boolean {
+                    val tab = dockBounds("ライブラリ") ?: return false
+                    val art = dockBounds(artLabel) ?: return false
+                    return kotlin.math.abs(tab.centerY() - art.centerY()) < 12 * density.density && art.left > tab.right
+                }
+                swipe(activity, .73f, .69f, .73f, .41f)
+                eventually("vertical scrolling docks the mini-player beside the tabs") { dockIsOneRow() }
+                screenshot("v054-compact-dock")
+                val art = checkNotNull(dockBounds(artLabel))
+                val x = art.centerX().toFloat() / activity.window.decorView.width
+                val y = art.centerY().toFloat() / activity.window.decorView.height
+                swipe(activity, x, y, x, y - .46f, 380, "v054-compact-artwork-morph")
+                eventually("compact dock opens the player") { textPresent("プレイヤーを閉じる") }
+                click("プレイヤーを閉じる")
+                eventually("player returns to the compact dock") { !textPresent("プレイヤーを閉じる") && dockIsOneRow() }
+                swipe(activity, .73f, .42f, .73f, .70f)
+                eventually("reverse scrolling expands the dock") {
+                    val tab = dockBounds("ライブラリ")
+                    val expandedArt = dockBounds(artLabel)
+                    tab != null && expandedArt != null && tab.centerY() - expandedArt.centerY() > 35 * density.density
+                }
+            }
             val lastTrack = tracks.first()
             val lastRowIndex = app.library.tracks.first().size // Track count header occupies item zero.
             val scrollToPosition = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_TO_POSITION.id

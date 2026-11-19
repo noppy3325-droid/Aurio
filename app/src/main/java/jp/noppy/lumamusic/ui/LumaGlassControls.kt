@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -36,6 +37,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -44,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import com.kyant.backdrop.shadow.Shadow
 import jp.noppy.lumamusic.playback.PlaybackUi
 import kotlinx.coroutines.CancellationException
@@ -71,16 +74,18 @@ import kotlin.math.sin
     toggle: () -> Unit,
     next: () -> Boolean,
     previous: () -> Boolean,
+    compact: Float,
+    surfaceOpacity: Float,
     tracks: @Composable BoxScope.() -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val reduced = LocalReducedMotion.current
     val lift by animateFloatAsState(if (pressed && !reduced) .65f else 0f, label = "mini player lens lift")
-    Column(modifier.fillMaxWidth()
-        .liquidSurface(LumaDock.MiniRadius, highlight = LumaDock.GlassHighlight, shadow = NavigationShadow, lensLift = { lift })
-        .padding(horizontal = 10.dp)) {
-        Row(Modifier.height(62.dp), verticalAlignment = Alignment.CenterVertically) {
+    Box(modifier.fillMaxWidth()) {
+        DockChrome(Modifier.matchParentSize(), LumaDock.MiniRadius, surfaceOpacity) { lift }
+        Column(Modifier.fillMaxSize().padding(horizontal = lerp(10.dp, 4.dp, compact))) {
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.weight(1f).fillMaxHeight().clipToBounds().then(trackGesture)
                     .clickable(interactionSource = interaction, indication = LocalIndication.current, role = Role.Button, onClickLabel = "プレイヤーを開く", onClick = open)
@@ -93,9 +98,12 @@ import kotlin.math.sin
                 content = tracks,
             )
             IconButton(toggle) { Icon(if (playback.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playback.playing) "一時停止" else "再生", Modifier.size(27.dp)) }
-            IconButton({ next() }, enabled = playback.nextItem != null) { Icon(Icons.Rounded.SkipNext, "次の曲", Modifier.size(27.dp)) }
+            if (compact < LumaDock.MiniNextHideAt) {
+                IconButton({ next() }, enabled = playback.nextItem != null) { Icon(Icons.Rounded.SkipNext, "次の曲", Modifier.size(27.dp)) }
+            }
         }
         if (playback.duration > 0) LinearProgressIndicator(progress = { (playback.position.toFloat() / playback.duration).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(1.dp), color = LocalContentColor.current.copy(.5f), trackColor = Color.Transparent, drawStopIndicator = {})
+        }
     }
 }
 
@@ -109,6 +117,14 @@ internal val LumaTabs = listOf(
 )
 
 private val NavigationShadow = Shadow(radius = 14.dp, color = Color.Black.copy(alpha = .08f))
+
+@Composable
+internal fun DockChrome(modifier: Modifier, radius: Int, opacity: Float, lift: () -> Float = { 0f }) {
+    if (opacity > .01f) {
+        Box(modifier.graphicsLayer { alpha = opacity }
+            .liquidSurface(radius, highlight = LumaDock.GlassHighlight, shadow = NavigationShadow, lensLift = lift))
+    }
+}
 
 private data class LensHandoff(val fromPage: Int, val toPage: Int, val releaseX: Float)
 
@@ -175,6 +191,8 @@ private class NavigationLensMotion(private val scope: CoroutineScope) {
     swipeEnabled: Boolean,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    compact: Float = 0f,
+    surfaceOpacity: Float = 1f,
 ) {
     val reduced = LocalReducedMotion.current
     val scope = rememberCoroutineScope()
@@ -183,18 +201,18 @@ private class NavigationLensMotion(private val scope: CoroutineScope) {
     var measuredSize by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(measuredSize, swipeEnabled, reduced) { motion.reset() }
     val lift by animateFloatAsState(
-        if (motion.lifted && !reduced) 1f else 0f,
-        spring(dampingRatio = .88f, stiffness = Spring.StiffnessMedium),
+        if ((motion.lifted || pager.isScrollInProgress) && !reduced) 1f else 0f,
+        spring(dampingRatio = .78f, stiffness = Spring.StiffnessMedium),
         label = "navigation lens lift",
     )
 
     Box(
-        modifier.widthIn(max = 416.dp).fillMaxWidth()
-            .liquidSurface(LumaDock.NavigationRadius, highlight = LumaDock.GlassHighlight, shadow = NavigationShadow)
-            .padding(4.dp),
+        modifier.widthIn(max = 416.dp).fillMaxWidth(),
+        contentAlignment = Alignment.Center,
     ) {
+        DockChrome(Modifier.matchParentSize(), LumaDock.NavigationRadius, surfaceOpacity)
         Box(
-            Modifier.fillMaxWidth().onSizeChanged { measuredSize = it }.clip(LumaShapes.Pill)
+            Modifier.padding(4.dp).fillMaxWidth().onSizeChanged { measuredSize = it }.clip(LumaShapes.Pill)
                 .dragNavigationLens(pager, motion, swipeEnabled, reduced, measuredSize) { select(it) },
         ) {
             Box(
@@ -207,7 +225,7 @@ private class NavigationLensMotion(private val scope: CoroutineScope) {
                         val topLeft = it.positionInParent()
                         motion.bounds[index] = Rect(topLeft.x, topLeft.y, topLeft.x + it.size.width, topLeft.y + it.size.height)
                     }
-                    NavigationTab(tab, pager, index, reduced, {
+                    NavigationTab(tab, pager, index, reduced, compact, {
                         motion.reset()
                         select(index)
                     }, anchor)
@@ -317,8 +335,9 @@ private fun Modifier.positionNavigationLens(
     val center = motion.center(page, start.center.x + (end.center.x - start.center.x) * fraction)
     val restWidth = (start.width + (end.width - start.width) * fraction).coerceAtLeast(1f)
     val stretch = if (reduced) 1f else motion.stretch(page, center, restWidth)
-    val width = (restWidth * stretch).roundToInt().coerceIn(1, constraints.maxWidth)
-    val height = (constraints.maxHeight * (1f - .045f * lift())).roundToInt().coerceAtLeast(1)
+    val raised = lift().coerceIn(0f, 1f)
+    val width = (restWidth * stretch * (.96f + .10f * raised)).roundToInt().coerceIn(1, constraints.maxWidth)
+    val height = (constraints.maxHeight * (.87f + .13f * raised)).roundToInt().coerceAtLeast(1)
     val lens = measurable.measure(Constraints.fixed(width, height))
     layout(constraints.maxWidth, constraints.maxHeight) {
         lens.place((center - width / 2f).roundToInt(), (constraints.maxHeight - height) / 2)
@@ -333,19 +352,25 @@ internal fun lensDragTarget(origin: Int, last: Int, delta: Float, distance: Floa
     return (origin + direction).coerceIn(0, last)
 }
 
-@Composable private fun NavigationTab(tab: LumaTab, pager: PagerState, index: Int, reduced: Boolean, onSelect: () -> Unit, modifier: Modifier) {
+@Composable private fun NavigationTab(tab: LumaTab, pager: PagerState, index: Int, reduced: Boolean, compact: Float, onSelect: () -> Unit, modifier: Modifier) {
     val chosen = pager.settledPage == index
     val strength = (1f - abs(pager.indicatorPage(reduced) - index)).coerceIn(0f, 1f)
     val tint = lerp(LocalContentColor.current.copy(alpha = .79f), MaterialTheme.colorScheme.primary, strength)
     Column(
-        modifier.heightIn(min = 56.dp).clip(LumaShapes.Pill)
+        modifier.heightIn(min = lerp(56.dp, 48.dp, compact)).clip(LumaShapes.Pill)
             .selectable(chosen, role = Role.Tab, onClick = onSelect).padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(tab.icon, null, Modifier.size(22.dp), tint = tint)
-        Spacer(Modifier.height(3.dp))
-        Text(tab.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, color = tint)
+        val labelsVisible = compact < .97f
+        Icon(tab.icon, if (labelsVisible) null else tab.label, Modifier.size(22.dp), tint = tint)
+        if (labelsVisible) {
+            val labelStyle = MaterialTheme.typography.labelSmall
+            val labelHeight = with(LocalDensity.current) { labelStyle.lineHeight.toDp() } + 2.dp
+            Box(Modifier.height(lerp(labelHeight, 0.dp, compact)).clipToBounds(), contentAlignment = Alignment.BottomCenter) {
+                Text(tab.label, Modifier.graphicsLayer { alpha = 1f - compact }, style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, color = tint)
+            }
+        }
     }
 }
 

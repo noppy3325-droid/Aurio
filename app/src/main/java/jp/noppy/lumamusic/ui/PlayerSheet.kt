@@ -67,6 +67,8 @@ internal class PlayerSheetState(private val scope: CoroutineScope, initiallyExpa
     var progress by mutableFloatStateOf(if (initiallyExpanded) 1f else 0f)
         private set
     var miniBounds by mutableStateOf<Rect?>(null)
+    var miniArtworkBounds by mutableStateOf<Rect?>(null)
+    var miniCompactness by mutableFloatStateOf(0f)
     private var hostOrigin by mutableStateOf(Offset.Zero)
     private var hostHeight by mutableFloatStateOf(1f)
     private var targetExpanded by mutableStateOf(initiallyExpanded)
@@ -85,6 +87,7 @@ internal class PlayerSheetState(private val scope: CoroutineScope, initiallyExpa
     }
 
     fun miniInHost(): Rect? = miniBounds?.translate(-hostOrigin)
+    fun miniArtworkInHost(): Rect? = miniArtworkBounds?.takeIf { it.width > 0f && it.height > 0f }?.translate(-hostOrigin)
 
     fun visibleBounds(size: Size): Rect {
         val mini = miniInHost() ?: Rect(0f, size.height * .85f, size.width, size.height)
@@ -253,25 +256,31 @@ internal fun PlayerSheet(
             PlayerScreen(vm, playback, track, favorite, standby, output, sheet::close, sound, sheet, artworkScene, miniSurface, wide, panel) { panel = it }
             // The miniature text follows its starting plate before the expanded
             // information and transport become visible. Artwork stays in one layer.
+            val compact = sheet.miniCompactness
             Row(
                 Modifier.morphBounds { width, height ->
                     val mini = sheet.miniInHost() ?: Rect(0f, height * .85f, width, height)
-                    val left = mini.left + 64.dp.toPx()
+                    val gap = lerp(12f, 6f, compact).dp.toPx()
+                    val left = sheet.miniArtworkInHost()?.right?.plus(gap) ?: (mini.left + lerp(64f, 40f, compact).dp.toPx())
                     val top = lerp(mini.top, 0f, sheet.progress)
-                    Rect(left, top, (mini.right - 10.dp.toPx()).coerceAtLeast(left), top + mini.height)
+                    Rect(left, top, (mini.right - lerp(10f, 4f, compact).dp.toPx()).coerceAtLeast(left), top + mini.height)
                 }.graphicsLayer { alpha = (1f - sheet.progress / .34f).coerceIn(0f, 1f) }
                     .clearAndSetSemantics {},
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
                     TrackText(title, style = MaterialTheme.typography.titleSmall, color = miniText)
-                    if (artist.isNotBlank()) TrackText(artist, style = MaterialTheme.typography.bodySmall, color = miniText)
+                    if (compact < LumaDock.MiniArtistHideAt && artist.isNotBlank()) {
+                        TrackText(artist, style = MaterialTheme.typography.bodySmall, color = miniText)
+                    }
                 }
                 Box(Modifier.width(48.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
                     Icon(if (playback.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, Modifier.size(27.dp), tint = miniText)
                 }
-                Box(Modifier.width(48.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.SkipNext, null, Modifier.size(27.dp), tint = miniText)
+                if (compact < LumaDock.MiniNextHideAt) {
+                    Box(Modifier.width(48.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.SkipNext, null, Modifier.size(27.dp), tint = miniText)
+                    }
                 }
             }
         }

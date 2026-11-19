@@ -1,6 +1,8 @@
 package jp.noppy.lumamusic.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import kotlin.math.sqrt
 
 internal data class ArtworkAmbientPalette(
     val topLeft: Color,
@@ -68,15 +70,23 @@ private val Color.chroma: Float get() = peak - floor
  * ceiling for the control region, so white controls don't need a second scrim.
  */
 internal fun playerAmbientTone(sample: Color, accent: Color, ceiling: Float): Color {
-    val source = when {
-        sample.chroma >= .065f -> sample
-        accent.chroma >= .065f -> accent
-        else -> ArtworkAmbientPalette.Default.dominant
+    val peak = ceiling * (.64f + .36f * sqrt(sample.peak))
+
+    fun grade(source: Color, minSaturation: Float): Color {
+        val chroma = source.chroma
+        if (chroma == 0f) return Color(peak, peak, peak)
+        val saturation = (chroma / source.peak).coerceIn(minSaturation, .84f)
+        val floor = source.floor
+        fun channel(value: Float) = peak * (1f - saturation * (source.peak - value) / (source.peak - floor))
+        return Color(channel(source.red), channel(source.green), channel(source.blue))
     }
-    val floor = source.floor
-    val chroma = source.chroma
-    val saturation = (chroma / source.peak).coerceIn(.58f, .86f)
-    val darkestChannel = ceiling * (1f - saturation)
-    fun channel(value: Float) = darkestChannel + (value - floor) / chroma * (ceiling - darkestChannel)
-    return Color(channel(source.red), channel(source.green), channel(source.blue))
+
+    // Give neutral shadows and highlights their own tones, even on grayscale art.
+    val softInk = Color(0xFF536883)
+    val softPaper = Color(0xFFAA8268)
+    val neutral = lerp(grade(softInk, .38f), grade(softPaper, .38f), sample.peak)
+    val fromAccent = ((accent.chroma - .075f) / .10f).coerceIn(0f, 1f)
+    val fromSample = ((sample.chroma - .035f) / .09f).coerceIn(0f, 1f)
+    val surrounding = lerp(neutral, grade(accent, .54f), fromAccent)
+    return lerp(surrounding, grade(sample, .54f), fromSample)
 }

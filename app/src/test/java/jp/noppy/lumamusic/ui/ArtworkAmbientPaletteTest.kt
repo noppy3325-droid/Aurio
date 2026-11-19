@@ -33,12 +33,18 @@ class ArtworkAmbientPaletteTest {
         assertEquals(rose, palette.bottomRight)
     }
 
-    @Test fun `neutral edges use a colored accent even on white or black covers`() {
-        val fallback = playerAmbientTone(Color.White, Color.LightGray, .39f)
+    @Test fun `neutral artwork keeps separate highlights and shadows`() {
+        val highlight = playerAmbientTone(Color.White, Color.LightGray, .39f)
+        val shadow = playerAmbientTone(Color.Black, Color.Gray, .39f)
+
+        assertTrue(highlight.red > highlight.blue)
+        assertTrue(shadow.blue > shadow.red)
+        assertTrue(highlight.luminance() > shadow.luminance())
+    }
+
+    @Test fun `gray edges can pick up color from elsewhere in the artwork`() {
         val blue = playerAmbientTone(Color.LightGray, Color(0xFF4254C9), .39f)
 
-        assertTrue(fallback.blue > fallback.green + .15f)
-        assertEquals(fallback, playerAmbientTone(Color.Black, Color.Gray, .39f))
         assertTrue(blue.blue > blue.red + .15f)
     }
 

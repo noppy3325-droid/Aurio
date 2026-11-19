@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -88,6 +89,13 @@ import java.time.format.DateTimeFormatter
     val reducedMotion = prefs.reducedMotion || quality == GlassQuality.REDUCED
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val canSwipeTabs = !playerVisible && !imeVisible
+    val density = LocalDensity.current
+    val dockScroll = remember(density) {
+        with(density) { DockScroll(30.dp.toPx(), 18.dp.toPx()) }
+    }
+    val hasMiniPlayer = playback.mediaId != null && !imeVisible
+    SideEffect { dockScroll.enabled = canSwipeTabs && hasMiniPlayer }
+    LaunchedEffect(pager.settledPage, hasMiniPlayer, dockScroll) { dockScroll.expand() }
     val tabFling = PagerDefaults.flingBehavior(pager, snapPositionalThreshold = .32f)
     fun selectTab(index: Int) {
         focus.clearFocus()
@@ -147,7 +155,8 @@ import java.time.format.DateTimeFormatter
                             Box(Modifier.matchParentSize().background(scheme.background))
                             HorizontalPager(
                                 state = pager,
-                                modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
+                                modifier = Modifier.fillMaxSize().nestedScroll(dockScroll)
+                                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
                                 userScrollEnabled = canSwipeTabs,
                                 flingBehavior = tabFling,
                                 key = { LumaTabs[it].key },
@@ -177,8 +186,13 @@ import java.time.format.DateTimeFormatter
                         }, overlay = {
                             val dockInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
                                 .union(WindowInsets.mandatorySystemGestures.only(WindowInsetsSides.Bottom))
-                            Column(
-                                Modifier.align(Alignment.BottomCenter)
+                            val miniPlayer: (@Composable (Modifier, Float, Float) -> Unit)? =
+                                if (hasMiniPlayer) ({ dockModifier, compact, opacity ->
+                                    MiniPlayerRoute(vm, selected, sheet, dockModifier, compact, opacity)
+                                }) else null
+                            PlaybackDock(
+                                pager, dockScroll.compact, canSwipeTabs, ::selectTab,
+                                modifier = Modifier.align(Alignment.BottomCenter)
                                     // Measure the complete dock, including its remaining bottom inset.
                                     // The common parent has already consumed the keyboard inset.
                                     .onSizeChanged { dockHeightPx = it.height }
@@ -188,12 +202,8 @@ import java.time.format.DateTimeFormatter
                                         end = LumaDock.HorizontalMargin,
                                         bottom = LumaDock.BottomMargin,
                                     ),
-                                verticalArrangement = Arrangement.spacedBy(LumaDock.PanelGap),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                if (playback.mediaId != null && !imeVisible) MiniPlayerRoute(vm, selected, sheet)
-                                LumaGlassTabBar(pager, canSwipeTabs, ::selectTab)
-                            }
+                                miniPlayer = miniPlayer,
+                            )
                         })
                         if (playback.mediaId != null) {
                             tabState.SaveableStateProvider("player-overlay") {
@@ -220,7 +230,14 @@ import java.time.format.DateTimeFormatter
     }
 }
 
-@Composable private fun MiniPlayerRoute(vm: LumaViewModel, track: Track?, sheet: PlayerSheetState) {
+@Composable private fun MiniPlayerRoute(
+    vm: LumaViewModel,
+    track: Track?,
+    sheet: PlayerSheetState,
+    modifier: Modifier,
+    compact: Float,
+    surfaceOpacity: Float,
+) {
     val playback by vm.playback.state.collectAsStateWithLifecycle()
     val currentTrack = track?.takeIf { it.uri == playback.mediaId }
     val display = playback.copy(
@@ -234,16 +251,21 @@ import java.time.format.DateTimeFormatter
     val currentDisplay = rememberUpdatedState(display)
     val currentReduced = rememberUpdatedState(reduced)
     LaunchedEffect(display.index, display.mediaId) { motion.observe(display) }
+    SideEffect { sheet.miniCompactness = compact }
     LumaGlassMiniPlayer(
         display,
-        modifier = Modifier.onGloballyPositioned { sheet.miniBounds = it.boundsInRoot() }
+        modifier = modifier.onGloballyPositioned { sheet.miniBounds = it.boundsInRoot() }
             .graphicsLayer { alpha = if (sheet.active) 0f else 1f },
         trackGesture = Modifier.miniPlayerDrag(sheet, motion, currentDisplay, currentReduced, vm.playback),
         open = sheet::open,
         toggle = vm.playback::toggle,
         next = { vm.playback.next() },
         previous = { vm.playback.previousItem() },
-    ) { MiniPlayerTracks(display, motion, reduced) }
+        compact = compact,
+        surfaceOpacity = surfaceOpacity,
+    ) {
+        MiniPlayerTracks(display, motion, reduced, compact) { sheet.miniArtworkBounds = it }
+    }
 }
 
 @Composable private fun StandbyScreen(vm: LumaViewModel, playback: PlaybackUi, track: Track?, prefs: Preferences, standby: StandbyController, sound: () -> Unit, bitPerfect: Boolean) {

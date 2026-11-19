@@ -14,12 +14,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.media3.common.MediaItem
 import jp.noppy.lumamusic.playback.PlaybackController
 import jp.noppy.lumamusic.playback.PlaybackUi
@@ -201,7 +205,13 @@ internal fun Modifier.miniPlayerDrag(
 }
 
 @Composable
-internal fun BoxScope.MiniPlayerTracks(playback: PlaybackUi, motion: MiniPlayerMotion, reducedMotion: Boolean) {
+internal fun BoxScope.MiniPlayerTracks(
+    playback: PlaybackUi,
+    motion: MiniPlayerMotion,
+    reducedMotion: Boolean,
+    compact: Float,
+    onArtworkBounds: (Rect) -> Unit,
+) {
     val start = motion.base
     val direction = motion.previewDirection
     val shown = if (reducedMotion) playback else start ?: playback
@@ -223,7 +233,12 @@ internal fun BoxScope.MiniPlayerTracks(playback: PlaybackUi, motion: MiniPlayerM
             val modifier = Modifier.matchParentSize().graphicsLayer {
                 translationX = if (reducedMotion) 0f else motion.offset + card.side * size.width
             }
-            MiniTrackRow(card.track, if (card.side == 0f) modifier else modifier.clearAndSetSemantics {})
+            val currentCard = card.side == 0f
+            val artworkAnchor = if (currentCard) Modifier.onGloballyPositioned { onArtworkBounds(it.boundsInRoot()) } else Modifier
+            MiniTrackRow(
+                card.track, if (currentCard) modifier else modifier.clearAndSetSemantics {},
+                compact, artworkAnchor,
+            )
         }
     }
 }
@@ -238,13 +253,13 @@ private fun MediaItem.presentation() = MiniTrack(
 )
 
 @Composable
-private fun MiniTrackRow(track: MiniTrack, modifier: Modifier) {
+private fun MiniTrackRow(track: MiniTrack, modifier: Modifier, compact: Float, artworkAnchor: Modifier) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Artwork(track.artwork, track.title, Modifier.size(42.dp), 10)
-        Spacer(Modifier.width(12.dp))
+        Artwork(track.artwork, track.title, artworkAnchor.size(lerp(42.dp, 30.dp, compact)), 10)
+        Spacer(Modifier.width(lerp(12.dp, 6.dp, compact)))
         Column(Modifier.weight(1f)) {
             TrackText(track.title, style = MaterialTheme.typography.titleSmall)
-            if (track.artist.isNotBlank()) TrackText(track.artist, style = MaterialTheme.typography.bodySmall)
+            if (compact < LumaDock.MiniArtistHideAt && track.artist.isNotBlank()) TrackText(track.artist, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
