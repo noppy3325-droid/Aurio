@@ -1,8 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
-  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#536d9d"/><stop offset=".48" stop-color="#343d69"/><stop offset="1" stop-color="#171b36"/></linearGradient></defs>
-  <rect width="108" height="108" rx="24" fill="url(#bg)"/>
-  <g fill="none" stroke="#f9f7ff" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M32 68C32 51 41 37 54 32c13 5 22 19 22 36" stroke-width="7"/>
-    <path d="M36 67c7 0 9-8 15-8s7 8 13 8c5 0 7-5 9-6" stroke-width="5.5"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="18 18 72 72">
+  <title>Aurio</title>
+  <defs>
+    <linearGradient id="background" gradientUnits="userSpaceOnUse" x1="18" y1="18" x2="90" y2="90">
+      <stop offset="0" stop-color="#273A49"/>
+      <stop offset=".55" stop-color="#182531"/>
+      <stop offset="1" stop-color="#101820"/>
+    </linearGradient>
+  </defs>
+  <rect x="18" y="18" width="72" height="72" rx="17" fill="url(#background)"/>
+  <g fill="none" stroke-linecap="round">
+    <path d="M60.89,29.97 A25,25 0,1 0,77.78,61.73" stroke="#FF816B" stroke-width="9"/>
+    <path d="M53.89,41.33 A12.7,12.7 0,1 0,62.58,62.33" stroke="#FF816B" stroke-width="6"/>
+    <path d="M65.75,42.75 L73.85,34.65" stroke="#FFF0D9" stroke-width="7"/>
   </g>
 </svg>

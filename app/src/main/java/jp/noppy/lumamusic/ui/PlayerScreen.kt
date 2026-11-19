@@ -58,7 +58,7 @@ internal fun PlayerScreen(
             surface = Color(0xFF201C23),
             onBackground = Color.White,
             onSurface = Color.White,
-            onSurfaceVariant = Color(0xFFECE6EC),
+            onSurfaceVariant = Color(0xFFFAF4F8),
             primary = Color(0xFFF8C5D5)
         )
     }
@@ -96,7 +96,7 @@ internal fun PlayerScreen(
                                     Modifier.weight(1f).fillMaxHeight().playerSheetDrag(sheet, opening = false).padding(start = 8.dp),
                                     contentAlignment = Alignment.CenterStart
                                 ) {
-                                    if (album.isNotEmpty()) TrackText(album, style = MaterialTheme.typography.labelMedium, color = Color.White.copy(.88f))
+                                    if (album.isNotEmpty()) TrackText(album, style = MaterialTheme.typography.labelMedium, color = Color.White.copy(.96f))
                                 }
                                 Box {
                                     IconButton({ menu = true }) { Icon(Icons.Rounded.MoreHoriz, "再生メニュー") }
@@ -173,9 +173,18 @@ internal fun PlayerScreen(
 
 @Composable private fun RowScope.PlayerTool(label: String, icon: ImageVector, selected: Boolean, compact: Boolean, action: () -> Unit) {
     Column(Modifier.weight(1f).heightIn(min = 48.dp).clickable(onClick = action).padding(horizontal = 4.dp, vertical = if (compact) 0.dp else 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Icon(icon, null, Modifier.size(21.dp), tint = if (selected) MaterialTheme.colorScheme.primary else LocalContentColor.current.copy(.78f))
+        Icon(icon, null, Modifier.size(21.dp), tint = if (selected) MaterialTheme.colorScheme.primary else LocalContentColor.current.copy(.92f))
         Spacer(Modifier.height(if (compact) 2.dp else 4.dp))
-        TrackText(label, style = if (compact) MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, lineHeight = 14.sp) else MaterialTheme.typography.labelSmall, color = if (selected) MaterialTheme.colorScheme.primary else LocalContentColor.current.copy(.78f))
+        val caption = MaterialTheme.typography.labelSmall
+        TrackText(
+            label,
+            style = caption.copy(
+                fontSize = if (compact) 11.sp else caption.fontSize,
+                lineHeight = if (compact) 14.sp else caption.lineHeight,
+                fontWeight = if (selected) FontWeight.SemiBold else caption.fontWeight,
+            ),
+            color = LocalContentColor.current.copy(.96f),
+        )
     }
 }
 

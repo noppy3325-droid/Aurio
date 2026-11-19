@@ -98,7 +98,7 @@ val LocalReducedMotion = staticCompositionLocalOf { false }
     return drawBackdrop(
         backdrop = source,
         shape = { shape },
-        highlight = { if (selectionLens) highlight.copy(alpha = .54f + .24f * lensLift()) else highlight },
+        highlight = { if (selectionLens) highlight.copy(alpha = .60f + .38f * lensLift()) else highlight },
         shadow = { shadow },
         effects = {
             vibrancy()
@@ -106,21 +106,37 @@ val LocalReducedMotion = staticCompositionLocalOf { false }
             // black/white jackets, while the live image and edge lens stay visible.
             colorControls(brightness = if (dark) -.18f else .18f, contrast = .6f)
             blur((when {
-                selectionLens -> 4f
+                selectionLens -> 4f - 2.5f * lensLift()
                 quality == GlassQuality.HIGH -> 12f
                 quality == GlassQuality.BALANCED -> 8f
                 else -> 4f
             }).dp.toPx())
             if (quality != GlassQuality.REDUCED && Build.VERSION.SDK_INT >= 33) {
                 val lift = lensLift()
-                val depth = (8f + 5f * lift).dp
-                val shift = (if (quality == GlassQuality.HIGH) 20f + 5f * lift else 12f + 4f * lift).dp
+                val depth = if (selectionLens) (10f + 12f * lift).dp else (8f + 5f * lift).dp
+                val shift = when {
+                    selectionLens -> (16f + 20f * lift).dp
+                    quality == GlassQuality.HIGH -> (20f + 5f * lift).dp
+                    else -> (12f + 4f * lift).dp
+                }
                 lens(depth.toPx(), shift.toPx(), chromaticAberration = selectionLens && quality == GlassQuality.HIGH)
             }
         },
         onDrawSurface = {
-            drawRect(tint.copy(alpha = if (dark) .38f else .26f))
-            if (selectionLens) drawRect(accent.copy(alpha = .14f - .05f * lensLift()))
+            if (selectionLens) {
+                val lift = lensLift()
+                drawRect(tint.copy(alpha = if (dark) .26f - .15f * lift else .17f - .11f * lift))
+                drawRect(
+                    Brush.verticalGradient(
+                        0f to Color.White.copy(alpha = .29f + .22f * lift),
+                        .22f to Color.White.copy(alpha = .035f),
+                        .75f to accent.copy(alpha = .09f + .04f * lift),
+                        1f to accent.copy(alpha = .22f + .10f * lift),
+                    )
+                )
+            } else {
+                drawRect(tint.copy(alpha = if (dark) .38f else .26f))
+            }
         }
     )
 }

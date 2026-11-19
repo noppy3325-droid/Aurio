@@ -190,10 +190,23 @@ class UiSmokeTest {
             }
             val (homeX, homeY) = center("ホーム")
             val (libraryX, libraryY) = center("ライブラリ")
+            screenshot("v027-lens-rest")
+            val pressStarted = SystemClock.uptimeMillis()
+            fun lensTouch(action: Int) {
+                val event = MotionEvent.obtain(pressStarted, SystemClock.uptimeMillis(), action, homeX * view.width, homeY * view.height, 0)
+                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                try { main { activity.dispatchTouchEvent(event) } } finally { event.recycle() }
+            }
+            lensTouch(MotionEvent.ACTION_DOWN)
+            try {
+                screenshot("v027-lens-raised")
+            } finally {
+                lensTouch(MotionEvent.ACTION_CANCEL)
+            }
             swipe(activity, homeX, homeY, libraryX, homeY, 380, cancel = true)
             Thread.sleep(700)
             eventually("cancelled lens drag stays on home") { tabSelected("ホーム") }
-            swipe(activity, homeX, homeY, libraryX, homeY, 380, frame = "rev2-direct-drag")
+            swipe(activity, homeX, homeY, libraryX, homeY, 380, frame = "v027-lens-drag")
             eventually("right lens drag lands on library") { tabSelected("ライブラリ") }
             swipe(activity, .79f, .55f, .21f, .55f, 380, frame = "rev2-body-swipe")
             eventually("left body swipe lands on search") { tabSelected("検索") }
@@ -218,10 +231,10 @@ class UiSmokeTest {
         val palette = if (artworkMatrix) listOf(
             0xFF183D85L to 0xFF0A1A45L, 0xFFE84074L to 0xFFB42042L, 0xFF27A670L to 0xFF065738L,
             0xFFFFFFFFL to 0xFFF3F1EDL, 0xFF181719L to 0xFF050506L, 0xFFF4C8DCL to 0xFFB9D8EBL,
-            0xFF336FC8L to 0xFFFF8651L,
+            0xFF336FC8L to 0xFFFF8651L, 0xFF7D1335L to 0xFF9D1637L,
         ) else listOf(0xFF405A73L, 0xFF89635AL, 0xFF41605BL, 0xFF898274L, 0xFF735779L, 0xFFAC7B5EL)
             .map { it to 0xFF121820L }
-        val names = if (artworkMatrix) listOf("Navy", "Rose", "Jade", "Porcelain", "Charcoal", "Pastel", "Blue to coral", "No cover")
+        val names = if (artworkMatrix) listOf("Navy", "Rose", "Jade", "Porcelain", "Charcoal", "Pastel", "Blue to coral", "Crimson Bloom", "No cover")
         else listOf("Blue Hour", "Evening Light", "静かな海", "Passing Days", "月のあいだ", "First Light")
         val art = palette.mapIndexed { index, (top, bottom) ->
             val bitmap = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
@@ -234,6 +247,24 @@ class UiSmokeTest {
             canvas.drawCircle(380f, 150f, 190f, paint)
             paint.color = Color.argb(32, 255, 255, 255)
             canvas.drawCircle(100f, 390f, 180f, paint)
+            if (artworkMatrix && names[index] == "Charcoal") {
+                paint.color = Color.WHITE
+                canvas.drawRect(350f, 0f, 512f, 52f, paint)
+            }
+            if (artworkMatrix && names[index] == "Crimson Bloom") {
+                paint.shader = android.graphics.RadialGradient(
+                    345f, 324f, 180f, intArrayOf(0xFFFFD895.toInt(), 0xEFF0A063.toInt(), 0x00B33F60),
+                    floatArrayOf(0f, .46f, 1f), Shader.TileMode.CLAMP,
+                )
+                canvas.drawRect(0f, 0f, 512f, 512f, paint)
+                paint.shader = null
+                paint.color = 0xD4AB2446.toInt()
+                canvas.drawOval(-44f, 176f, 269f, 497f, paint)
+                paint.color = 0xFFFF728A.toInt()
+                canvas.drawOval(62f, 150f, 252f, 423f, paint)
+                paint.color = 0xFF941434.toInt()
+                canvas.drawOval(103f, 188f, 227f, 348f, paint)
+            }
             paint.color = if (artworkMatrix && index in listOf(3, 5)) Color.rgb(46, 39, 44) else Color.WHITE
             paint.textSize = 36f
             paint.typeface = android.graphics.Typeface.create(context.resources.getFont(jp.noppy.lumamusic.R.font.noto_sans_jp_regular), 400, false)
@@ -314,7 +345,7 @@ class UiSmokeTest {
                     textPresent(track.title) && if (track.artwork == null) covers.isEmpty()
                     else covers == listOf("アルバムアート: ${track.title}")
                 }
-                screenshot("v054-artwork-${index + 1}-${track.title.lowercase().replace(' ', '-')}")
+                screenshot("v027-artwork-${index + 1}-${track.title.lowercase().replace(' ', '-')}")
                 if (track.title in listOf("Porcelain", "Charcoal", "Blue to coral")) {
                     val image = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
                     try {
@@ -328,6 +359,21 @@ class UiSmokeTest {
                             assertTrue("${track.title} background lost its color at y=$heightFraction: $channels", channels.max() - channels.min() >= minimumColorDifference)
                             if (track.title == "Blue to coral") {
                                 assertTrue("The header and controls should use different parts of the artwork", Color.blue(header) > Color.red(header) && Color.red(color) > Color.blue(color))
+                            }
+                        }
+                    } finally {
+                        image.recycle()
+                    }
+                }
+                if (track.title == "Crimson Bloom") {
+                    val image = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
+                    try {
+                        for (fraction in listOf(.70f, .82f, .94f)) {
+                            // Sample beyond the title, timeline, and other controls.
+                            for (edge in listOf(.02f, .98f)) {
+                                val color = image.getPixel((image.width * edge).toInt(), (image.height * fraction).toInt())
+                                assertTrue("Artwork red should reach x=$edge y=$fraction: ${Integer.toHexString(color)}",
+                                    Color.red(color) >= 115 && Color.red(color) >= Color.green(color) + 40)
                             }
                         }
                     } finally {

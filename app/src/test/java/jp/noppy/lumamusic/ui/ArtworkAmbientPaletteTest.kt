@@ -34,8 +34,8 @@ class ArtworkAmbientPaletteTest {
     }
 
     @Test fun `neutral artwork keeps separate highlights and shadows`() {
-        val highlight = playerAmbientTone(Color.White, Color.LightGray, .39f)
-        val shadow = playerAmbientTone(Color.Black, Color.Gray, .39f)
+        val highlight = playerAmbientTone(Color.White, Color.LightGray)
+        val shadow = playerAmbientTone(Color.Black, Color.Gray)
 
         assertTrue(highlight.red > highlight.blue)
         assertTrue(shadow.blue > shadow.red)
@@ -43,20 +43,29 @@ class ArtworkAmbientPaletteTest {
     }
 
     @Test fun `gray edges can pick up color from elsewhere in the artwork`() {
-        val blue = playerAmbientTone(Color.LightGray, Color(0xFF4254C9), .39f)
+        val blue = playerAmbientTone(Color.LightGray, Color(0xFF4254C9))
 
         assertTrue(blue.blue > blue.red + .15f)
     }
 
-    @Test fun `bright colors keep their hue and contrast under the player controls`() {
-        val blue = playerAmbientTone(Color(0xFF5A81C4), Color.Red, .39f)
-        val coral = playerAmbientTone(Color(0xFFF19779), Color.Blue, .31f)
-        val brightBackground = playerAmbientTone(Color.Yellow, Color.Yellow, .39f)
-        val panelBackground = Color.White.copy(alpha = .12f).compositeOver(brightBackground)
-        val contrast = (Color.White.luminance() + .05f) / (panelBackground.luminance() + .05f)
+    @Test fun `bright colors keep their hue under the player controls`() {
+        val blue = playerAmbientTone(Color(0xFF5A81C4), Color.Red)
+        val coral = playerAmbientTone(Color(0xFFF19779), Color.Blue)
 
         assertTrue(blue.blue > blue.green && blue.green > blue.red)
         assertTrue(coral.red > coral.green && coral.green > coral.blue)
-        assertTrue(contrast >= 4.5f)
+    }
+
+    @Test fun `control contrast preserves red and blue pools instead of flattening their channels`() {
+        val red = playerAmbientTone(Color(0xFFC9283F), Color.Blue)
+        val blue = playerAmbientTone(Color(0xFF263DE0), Color.Red)
+        val yellow = playerAmbientTone(Color.Yellow, Color.Red)
+
+        assertTrue(red.red > .65f && red.red - red.green > .45f)
+        assertTrue(blue.blue > .70f && blue.blue - blue.red > .45f)
+        for (background in listOf(red, blue, yellow)) {
+            val label = Color.White.copy(alpha = .96f).compositeOver(background)
+            assertTrue((label.luminance() + .05f) / (background.luminance() + .05f) >= 4.5f)
+        }
     }
 }

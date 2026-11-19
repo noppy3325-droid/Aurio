@@ -2,7 +2,8 @@ package jp.noppy.lumamusic.ui
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
-import kotlin.math.sqrt
+import androidx.compose.ui.graphics.luminance
+import kotlin.math.pow
 
 internal data class ArtworkAmbientPalette(
     val topLeft: Color,
@@ -65,17 +66,15 @@ private val Color.peak: Float get() = maxOf(red, green, blue)
 private val Color.floor: Float get() = minOf(red, green, blue)
 private val Color.chroma: Float get() = peak - floor
 
-/**
- * Grade the canvas colors before drawing them. Every channel stays within the
- * ceiling for the control region, so white controls don't need a second scrim.
- */
-internal fun playerAmbientTone(sample: Color, accent: Color, ceiling: Float): Color {
-    val peak = ceiling * (.64f + .36f * sqrt(sample.peak))
+/** Keep each patch's hue while limiting its brightness for white text. */
+internal fun playerAmbientTone(sample: Color, accent: Color): Color {
+    val maxLuminance = .16f
+    val peak = .30f + .58f * sample.peak.pow(.80f)
 
     fun grade(source: Color, minSaturation: Float): Color {
         val chroma = source.chroma
         if (chroma == 0f) return Color(peak, peak, peak)
-        val saturation = (chroma / source.peak).coerceIn(minSaturation, .84f)
+        val saturation = (chroma / source.peak).coerceIn(minSaturation, .90f)
         val floor = source.floor
         fun channel(value: Float) = peak * (1f - saturation * (source.peak - value) / (source.peak - floor))
         return Color(channel(source.red), channel(source.green), channel(source.blue))
@@ -85,8 +84,20 @@ internal fun playerAmbientTone(sample: Color, accent: Color, ceiling: Float): Co
     val softInk = Color(0xFF536883)
     val softPaper = Color(0xFFAA8268)
     val neutral = lerp(grade(softInk, .38f), grade(softPaper, .38f), sample.peak)
-    val fromAccent = ((accent.chroma - .075f) / .10f).coerceIn(0f, 1f)
-    val fromSample = ((sample.chroma - .035f) / .09f).coerceIn(0f, 1f)
+    val fromAccent = ((accent.chroma - .075f) / .10f).coerceIn(0f, 1f) * .80f
+    val fromSample = ((sample.chroma - .025f) / .09f).coerceIn(0f, 1f)
     val surrounding = lerp(neutral, grade(accent, .54f), fromAccent)
-    return lerp(surrounding, grade(sample, .54f), fromSample)
+    val tone = lerp(surrounding, grade(sample, .52f), fromSample)
+    if (tone.luminance() <= maxLuminance) return tone
+
+    // Scale all three channels together. Yellow and white need more correction
+    // than red or blue, even when they start at the same channel level.
+    fun darken(factor: Float) = Color(tone.red * factor, tone.green * factor, tone.blue * factor)
+    var darker = 0f
+    var lighter = 1f
+    repeat(8) {
+        val middle = (darker + lighter) / 2f
+        if (darken(middle).luminance() <= maxLuminance) darker = middle else lighter = middle
+    }
+    return darken(darker)
 }

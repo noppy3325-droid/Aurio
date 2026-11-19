@@ -2,6 +2,10 @@ package jp.noppy.lumamusic.ui
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Shader
 import android.util.LruCache
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -33,17 +37,15 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.palette.graphics.Palette
 import coil3.BitmapImage
@@ -75,7 +77,8 @@ internal class PlayerArtworkScene(
 
 internal class ArtworkAmbient(
     val palette: ArtworkAmbientPalette,
-    val diffusion: ImageBitmap?,
+    val diffusion: Bitmap?,
+    val sourceSize: Size = Size.Zero,
     val headerLight: Float = 0f,
 ) {
     companion object {
@@ -150,42 +153,79 @@ private suspend fun loadArtworkAmbient(context: Context, loader: ImageLoader, ar
     }
     val palette = ArtworkAmbientPalette.fromPixels(pixels, width, height, dominant)
     val accent = palette.accent
-    // A bright patch behind the clock or menu can disappear in an average for
-    // the entire top edge. Use the brightest of several small areas instead.
-    val headerLight = (0 until 12).maxOf { index ->
-        val x = index % 6
-        val y = index / 6
-        regionColor(
-            pixels, width, width * x / 6, height * y / 8,
-            width * (x + 1) / 6, (height * (y + 1) / 8).coerceAtLeast(1),
-            palette.topLeft,
-        ).luminance()
-    }
-    // Sample overlapping patches once, then stretch this texture behind the photo
-    // and controls. The lower half follows the bottom of the photo and softens
-    // back towards the middle so the color continues past the feathered edge.
-    val columns = 16
-    val rows = 20
+    val headerLight = artworkHeaderLuminance(pixels, width, height)
+    // The texture preserves the coordinates of the source, so the color below
+    // a feathered edge continues from the art at that exact point.
+    val columns = 32
+    val rows = 32
+    val radiusX = (width * .16f).roundToInt()
+    val radiusY = (height * .16f).roundToInt()
     val softPixels = IntArray(columns * rows) { index ->
         val x = (index % columns).toFloat() / (columns - 1)
         val y = (index / columns).toFloat() / (rows - 1)
-        val curve = 1f - 1.55f * y
-        val imageY = 1f - curve * curve
         val centerX = (x * (width - 1)).roundToInt()
-        val centerY = (imageY * (height - 1)).roundToInt()
-        val radiusX = (width * (.12f + .07f * y)).roundToInt()
-        val radiusY = (height * (.12f + .08f * y)).roundToInt()
+        val centerY = (y * (height - 1)).roundToInt()
         val sample = regionColor(
             pixels, width,
             (centerX - radiusX).coerceAtLeast(0), (centerY - radiusY).coerceAtLeast(0),
             (centerX + radiusX + 1).coerceAtMost(width), (centerY + radiusY + 1).coerceAtMost(height),
             dominant,
         )
-        val ceiling = .39f - .14f * y * y
-        playerAmbientTone(sample, accent, ceiling).toArgb()
+        playerAmbientTone(sample, accent).toArgb()
     }
-    val diffusion = Bitmap.createBitmap(softPixels, columns, rows, Bitmap.Config.ARGB_8888).asImageBitmap()
-    return ArtworkAmbient(palette, diffusion, headerLight).also { artworkAmbientCache.put(artwork, it) }
+    val diffusion = Bitmap.createBitmap(softPixels, columns, rows, Bitmap.Config.ARGB_8888)
+    val sourceSize = Size(width.toFloat(), height.toFloat())
+    return ArtworkAmbient(palette, diffusion, sourceSize, headerLight).also { artworkAmbientCache.put(artwork, it) }
+}
+
+// Local highlights can sit directly behind the white clock or menu. Ignore
+// isolated bright pixels, but keep the near-white values in each header tile.
+private fun artworkHeaderLuminance(pixels: IntArray, width: Int, height: Int): Float =
+    (0 until 12).maxOf { tile ->
+        val column = tile % 6
+        val row = tile / 6
+        val luminances = buildList {
+            for (y in height * row / 8 until (height * (row + 1) / 8).coerceAtLeast(1)) {
+                for (x in width * column / 6 until width * (column + 1) / 6) {
+                    val argb = pixels[y * width + x]
+                    if (argb ushr 24 >= 192) add(Color(argb).luminance())
+                }
+            }
+        }.sorted()
+        luminances.getOrElse(luminances.size * 9 / 10) { 0f }
+    }
+
+private fun playerArtworkBounds(width: Float, height: Float, controlsTop: Float, overlap: Float, wide: Boolean): Rect =
+    if (wide) Rect(0f, 0f, width * .50f, height)
+    else Rect(0f, 0f, width, (controlsTop + overlap).coerceIn(1f, height.coerceAtLeast(1f)))
+
+private fun artworkFieldPaint(ambient: ArtworkAmbient, hero: Painter?, focus: Rect, wide: Boolean): Paint? {
+    val bitmap = ambient.diffusion ?: return null
+    if (focus.width <= 0f || focus.height <= 0f) return null
+    val intrinsicSize = hero?.intrinsicSize
+    val source = if (intrinsicSize != null && intrinsicSize != Size.Unspecified &&
+        intrinsicSize.width > 0f && intrinsicSize.height > 0f
+    ) {
+        intrinsicSize
+    } else {
+        ambient.sourceSize
+    }
+    val scale = ContentScale.Crop.computeScaleFactor(source, focus.size)
+    val width = source.width * scale.scaleX
+    val height = source.height * scale.scaleY
+    val left = focus.left + (focus.width - width) / 2f
+    val top = focus.top + if (wide) (focus.height - height) / 2f else 0f
+    val projection = Matrix().apply {
+        setScale(width / bitmap.width, height / bitmap.height)
+        postTranslate(left, top)
+    }
+    return Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        // Expand the image beyond its canvas by reflecting its low-frequency
+        // colors. The edge stays continuous as the photo fades into this field.
+        shader = BitmapShader(bitmap, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR).apply {
+            setLocalMatrix(projection)
+        }
+    }
 }
 
 @Composable
@@ -252,28 +292,40 @@ private fun PlayerArtworkSceneLayer(
     val accent = remember(palette) { palette.accent }
     val upperEdge = lerp(palette.topLeft, palette.topRight, .5f)
     val lowerEdge = lerp(palette.bottomLeft, palette.bottomRight, .5f)
-    val top = playerAmbientTone(upperEdge, accent, .30f)
-    val bottom = playerAmbientTone(lowerEdge, accent, .25f)
-    val headerShadeAlpha = .26f + .57f * ((scene.ambient.headerLight - .04f) / .42f).coerceIn(0f, 1f)
-    val heroAlpha = if (alternatePanel) .12f else 1f
+    val top = playerAmbientTone(upperEdge, accent)
+    val bottom = playerAmbientTone(lowerEdge, accent)
+    val headerShadeAlpha = .16f + .49f * ((scene.ambient.headerLight - .04f) / .47f).coerceIn(0f, 1f)
+    val heroAlpha = if (alternatePanel) .06f else 1f
+    val overlap = 96.dp
+    fun controlsTop(height: Float, bottomInset: Int): Float {
+        val details = detailsHeight().takeIf { it > 0 }?.toFloat() ?: height * .42f
+        return (height - bottomInset - details).coerceAtLeast(0f)
+    }
     Box(modifier.fillMaxSize().background(miniSurface)) {
         Box(Modifier.fillMaxSize().drawWithCache {
             val field = Brush.verticalGradient(
                 0f to top,
-                .48f to playerAmbientTone(palette.dominant, accent, .37f),
+                .48f to playerAmbientTone(palette.dominant, accent),
                 1f to bottom,
             )
-            val diffusionSize = IntSize(size.width.roundToInt(), size.height.roundToInt())
+            val focus = playerArtworkBounds(size.width, size.height,
+                controlsTop(size.height, safeDrawing.getBottom(this)), overlap.toPx(), wide)
+            val fieldPaint = artworkFieldPaint(scene.ambient, scene.hero, focus, wide)
+            val falloff = Brush.verticalGradient(.74f to Color.Transparent, 1f to Color.Black.copy(alpha = .14f))
             onDrawBehind {
                 val progress = sheet.progress
                 if (progress > 0f) {
                     val ambientAlpha = progress * (2f - progress)
-                    val diffusion = scene.ambient.diffusion
-                    if (diffusion == null) {
+                    if (fieldPaint == null) {
                         drawRect(field, alpha = ambientAlpha)
                     } else {
-                        drawImage(diffusion, dstSize = diffusionSize, alpha = ambientAlpha, filterQuality = FilterQuality.Low)
+                        fieldPaint.alpha = (ambientAlpha * 255f).roundToInt()
+                        drawIntoCanvas { canvas ->
+                            canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, fieldPaint)
+                        }
                     }
+                    drawRect(falloff, alpha = ambientAlpha)
+                    if (alternatePanel) drawRect(Color.Black, alpha = .15f * ambientAlpha)
                 }
             }
         })
@@ -284,15 +336,8 @@ private fun PlayerArtworkSceneLayer(
                     val edge = 42.dp.toPx()
                     Rect(Offset(mini.left + 10.dp.toPx(), mini.center.y - edge / 2), Size(edge, edge))
                 }
-                val end = if (wide) {
-                    Rect(0f, 0f, width * .50f, height)
-                } else {
-                    val details = detailsHeight().takeIf { it > 0 }?.toFloat() ?: height * .42f
-                    val detailsTop = (height - safeDrawing.getBottom(this) - details).coerceAtLeast(0f)
-                    // Leave the controls on the graded texture even when text size
-                    // or the device's insets leave little space for the photo.
-                    Rect(0f, 0f, width, minOf(height * .72f, width * 1.10f, detailsTop))
-                }
+                val end = playerArtworkBounds(width, height,
+                    controlsTop(height, safeDrawing.getBottom(this)), overlap.toPx(), wide)
                 interpolateBounds(start, end, sheet.progress)
             }.graphicsLayer {
                 clip = true
@@ -300,20 +345,28 @@ private fun PlayerArtworkSceneLayer(
                 compositingStrategy = CompositingStrategy.Offscreen
             }.drawWithCache {
                 if (size.minDimension <= 0f) return@drawWithCache onDrawWithContent { drawContent() }
+                val titleLine = (1f - overlap.toPx() / size.height).coerceIn(.22f, .94f)
+                val fadeStart = (titleLine - 126.dp.toPx() / size.height).coerceIn(.03f, titleLine - .06f)
                 val mask = if (wide) {
-                    Brush.horizontalGradient(.64f to Color.Transparent, 1f to Color.Black)
+                    Brush.horizontalGradient(.68f to Color.Transparent, .86f to Color.Black.copy(alpha = .34f), 1f to Color.Black)
                 } else {
                     Brush.verticalGradient(
-                        .64f to Color.Transparent,
-                        .86f to Color.Black.copy(alpha = .55f),
+                        fadeStart to Color.Transparent,
+                        (fadeStart + (titleLine - fadeStart) * .48f) to Color.Black.copy(alpha = .24f),
+                        titleLine to Color.Black.copy(alpha = .83f),
                         1f to Color.Black,
                     )
                 }
-                val statusAndHeader = safeDrawing.getTop(this) + (if (wide) 8.dp else 48.dp).toPx()
+                val titleShade = Brush.verticalGradient(
+                    fadeStart to Color.Transparent,
+                    titleLine to Color.Black.copy(alpha = .32f),
+                    1f to Color.Black.copy(alpha = .32f),
+                )
+                val statusAndHeader = safeDrawing.getTop(this) + (if (wide) 8.dp else 38.dp).toPx()
                 val headerShade = Brush.verticalGradient(
-                    colors = listOf(top.copy(alpha = headerShadeAlpha), top.copy(alpha = 0f)),
+                    colors = listOf(Color.Black.copy(alpha = headerShadeAlpha), Color.Transparent),
                     startY = statusAndHeader,
-                    endY = statusAndHeader + 68.dp.toPx(),
+                    endY = statusAndHeader + 60.dp.toPx(),
                 )
                 val miniFill = Brush.linearGradient(listOf(top, bottom))
                 onDrawWithContent {
@@ -323,7 +376,10 @@ private fun PlayerArtworkSceneLayer(
                     drawContent()
                     val feather = ((progress - .08f) / .92f).coerceIn(0f, 1f)
                     if (feather > 0f) {
-                        if (scene.hero != null) drawRect(headerShade, alpha = feather * heroAlpha)
+                        if (scene.hero != null) {
+                            drawRect(headerShade, alpha = feather * heroAlpha)
+                            if (!wide) drawRect(titleShade, alpha = feather * heroAlpha)
+                        }
                         drawRect(mask, alpha = feather, blendMode = BlendMode.DstOut)
                     }
                 }

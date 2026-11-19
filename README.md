@@ -8,7 +8,7 @@
 
 端末にある音楽を、美しく、軽やかに楽しむオフラインプレイヤー。
 
-[APKをダウンロード](https://github.com/noppy3325-droid/luma-music/releases) · [使い始める](#使い始める) · [ビルド](#開発する)
+[APKをダウンロード](https://github.com/noppy3325-droid/Aurio/releases) · [使い始める](#使い始める) · [ビルド](#開発する)
 
 Android 10+　 ·　 オフライン再生　 ·　 オープンソース
 
@@ -18,7 +18,7 @@ Android 10+　 ·　 オフライン再生　 ·　 オープンソース
 
 | ライブラリ | 再生画面 |
 |:---:|:---:|
-| <img src="docs/screenshots/v021/after/01-library-light.png" width="320" alt="楽曲ライブラリ"> | <img src="docs/screenshots/v026/v054-artwork-7-blue-to-coral.png" width="320" alt="ジャケットが画面上端から操作部までつながる再生画面"> |
+| <img src="docs/screenshots/v027/compact-dock.png" width="320" alt="ライブラリの上に重なるガラスのナビとミニプレイヤー"> | <img src="docs/screenshots/v027/v027-artwork-8-crimson-bloom.png" width="320" alt="赤いジャケットと、その色が画面下まで続く再生画面"> |
 
 *画面の楽曲名とアートワークはテスト用に生成したものです。*
 
@@ -31,7 +31,7 @@ Android 10+　 ·　 オフライン再生　 ·　 オープンソース
 
 ## 使い始める
 
-1. [リリースページ](https://github.com/noppy3325-droid/luma-music/releases)から最新のAPKをダウンロードし、Android端末にインストールします。
+1. [リリースページ](https://github.com/noppy3325-droid/Aurio/releases)から最新のAPKをダウンロードし、Android端末にインストールします。
 2. アプリを開き、音楽が入ったフォルダーを選びます。
 3. ライブラリから曲を選んで再生します。右上の設定からフォルダーを追加できます。
 
@@ -47,7 +47,7 @@ Windowsでは gradlew.bat を使ってください。assembleRelease は署名�
 
 音声処理と対応状況は[音声設計](docs/audio-dsp-v020.md)、依存関係とライセンスは[サードパーティ表記](THIRD_PARTY_NOTICES.md)をご覧ください。24bit/float音源は現在の共通再生経路でPCM16に変換されます。出力機器の仕様やビットパーフェクト再生は、確認できた情報だけを表示します。
 
-[v0.26の画面と操作](docs/VERIFICATION-v0.26.md) · [v0.24の検証記録](docs/VERIFICATION-v0.24.md)
+[v0.27の画面と操作](docs/VERIFICATION-v0.27.md) · [v0.26の検証記録](docs/VERIFICATION-v0.26.md)
 
 ## ライセンス
 
