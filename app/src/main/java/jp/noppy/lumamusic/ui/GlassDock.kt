@@ -80,11 +80,12 @@ internal fun PlaybackDock(
         val descend = phase(.36f, 1f)
         val navWidth = lerp(expandedNavWidth, mergedNavWidth, resize)
         val navX = lerp((availableWidth - expandedNavWidth) / 2, 0.dp, if (miniPlayer == null) 0f else resize)
-        val merge = if (miniPlayer == null) 0f else phase(.77f, .99f)
+        val joined = miniPlayer != null && amount >= .98f
+        val separateChrome = if (joined) 0f else 1f
         val rowHeight = lerp(navHeight, mergedHeight, amount)
 
-        if (merge > 0f) {
-            DockChrome(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(rowHeight), LumaDock.NavigationRadius, merge)
+        if (joined) {
+            DockChrome(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(rowHeight), LumaDock.NavigationRadius, 1f)
         }
         miniPlayer?.invoke(
             Modifier.align(Alignment.BottomStart)
@@ -92,13 +93,13 @@ internal fun PlaybackDock(
                 .width(lerp(availableWidth, (availableWidth - mergedNavWidth - 2.dp).coerceAtLeast(1.dp), resize))
                 .height(lerp(miniHeight, mergedHeight, amount)),
             resize,
-            1f - merge,
+            separateChrome,
         )
         LumaGlassTabBar(
             pager, swipeEnabled, selectTab,
             Modifier.align(Alignment.BottomStart).offset(x = navX).width(navWidth).height(rowHeight),
             compact = resize,
-            surfaceOpacity = 1f - merge,
+            surfaceOpacity = separateChrome,
         )
     }
 }

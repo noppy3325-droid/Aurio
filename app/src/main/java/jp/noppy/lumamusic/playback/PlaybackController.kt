@@ -148,7 +148,8 @@ class PlaybackController(context: Context, scope: CoroutineScope) {
         if (player.playWhenReady && player.playbackState != Player.STATE_ENDED) {
             player.pause()
         } else {
-            if (player.playbackState == Player.STATE_ENDED && player.isCommandAvailable(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)) {
+            if (player.playbackState == Player.STATE_ENDED && !player.shuffleModeEnabled &&
+                player.isCommandAvailable(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)) {
                 player.seekToDefaultPosition()
             }
             prepareIfIdle(player)

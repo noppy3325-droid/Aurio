@@ -2,84 +2,163 @@ package jp.noppy.lumamusic
 
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Rect
+import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
-import androidx.test.runner.lifecycle.Stage
 import androidx.activity.compose.setContent
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import jp.noppy.lumamusic.ui.GlassDemoScreen
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
-import org.junit.Assert.*
 import org.junit.runner.RunWith
 import java.io.File
+import kotlin.math.abs
 
 @RunWith(AndroidJUnit4::class)
 class GlassSpikeTest {
-    private fun AccessibilityNodeInfo.isVerticalScroller() = actionList.any {
-        it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id ||
-            it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
+    private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private val automation = instrumentation.uiAutomation
+    private val context = instrumentation.targetContext
+
+    @Test fun refractionMovesLiveCheckerEdgesWithoutPaintingOutsideLens() {
+        assumeTrue(Build.VERSION.SDK_INT >= 33)
+        val activity = launchDemo()
+        try {
+            click("赤青チェック")
+            listOf("Blur", "Refraction", "Highlight", "Tint", "Shadow", "Motion").forEach(::click)
+            val probe = Rect().also { bounds ->
+                find { it.contentDescription?.toString() == "屈折の検証面" }.getBoundsInScreen(bounds)
+            }
+            val nearEdge = Rect(
+                probe.left + probe.width() / 5, probe.top + 2,
+                probe.right - probe.width() / 5, probe.top + probe.height() / 3,
+            )
+            val outside = Rect(nearEdge.left, probe.bottom + 4, nearEdge.right, probe.bottom + nearEdge.height())
+            capture("v055-checker-neutral") { neutral ->
+                click("Refraction")
+                capture("v055-checker-refraction-only") { refracted ->
+                    val changed = changedRatio(neutral, refracted, nearEdge)
+                    assertTrue("Refraction must relocate the colored checker edges ($changed)", changed >= .03)
+                    assertTrue("Refraction must stay inside the optical surface", changedRatio(neutral, refracted, outside) < .01)
+                    scrollBackground()
+                    capture("v055-refraction-after-scroll") { scrolled ->
+                        assertTrue("The live source must move behind the lens", changedRatio(refracted, scrolled, nearEdge) >= .03)
+                    }
+                }
+            }
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+        }
     }
 
-    private fun launchDemo() {
-        val i=InstrumentationRegistry.getInstrumentation()
-        val a=i.startActivitySync(Intent(i.targetContext,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)) as MainActivity
-        // Exercise the production component in release builds as well as debug builds.
-        i.runOnMainSync { a.setContent { GlassDemoScreen() } }
-        Thread.sleep(1500)
+    @Test fun capturesIsolatedEffectsAndQualityFallbacks() {
+        val activity = launchDemo()
+        try {
+            capture("v055-light-rest") { }
+            scrollBackground()
+            capture("v055-light-scroll") { }
+            click("ダーク")
+            capture("v055-dark-rest") { }
+            click("赤青チェック")
+            val effects = listOf("Blur", "Refraction", "Highlight", "Tint", "Shadow", "Motion")
+            effects.forEach(::click)
+            for (effect in effects) {
+                click(effect)
+                capture("v055-${effect.lowercase()}-only") { }
+                click(effect)
+            }
+            effects.forEach(::click)
+            for (quality in listOf("高品質", "軽量", "オフ", "バランス")) {
+                click(quality)
+                find { it.text?.toString()?.contains("· $quality") == true }
+                capture("v055-quality-$quality") { }
+            }
+            val original = activity.requestedOrientation
+            try {
+                instrumentation.runOnMainSync { activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
+                capture("v055-landscape") { }
+            } finally {
+                instrumentation.runOnMainSync { activity.requestedOrientation = original }
+            }
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+        }
     }
-    @Test fun compareGlassFrames() {
-        val i=InstrumentationRegistry.getInstrumentation();val ctx=i.targetContext
-        launchDemo()
-        fun nodes():List<AccessibilityNodeInfo>{if(android.os.Build.VERSION.SDK_INT>=36)i.uiAutomation.clearCache();val list=mutableListOf<AccessibilityNodeInfo>();val q=ArrayDeque<AccessibilityNodeInfo>();i.uiAutomation.rootInActiveWindow?.let(q::add);while(q.isNotEmpty()){val n=q.removeFirst();n.refresh();list.add(n);for(k in 0 until n.childCount)n.getChild(k)?.let(q::add)};return list}
-        fun find(predicate:(AccessibilityNodeInfo)->Boolean):AccessibilityNodeInfo {repeat(30){nodes().firstOrNull(predicate)?.let{return it};Thread.sleep(100)};error("Accessibility target missing: ${nodes().mapNotNull{it.text}}")}
-        fun shell(cmd:String)=android.os.ParcelFileDescriptor.AutoCloseInputStream(i.uiAutomation.executeShellCommand(cmd)).bufferedReader().use{it.readText()}
-        fun scroll(action:Int) {
-            for(attempt in 0 until 20){if(find{it.isVerticalScroller()}.performAction(action)){Thread.sleep(1000);return};Thread.sleep(100)}
-            fail("Scroll action $action did not dispatch")
+
+    private fun launchDemo(): MainActivity {
+        val intent = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val activity = instrumentation.startActivitySync(intent) as MainActivity
+        // Use the real renderer even when verifying the signed release package.
+        instrumentation.runOnMainSync { activity.setContent { GlassDemoScreen() } }
+        return activity
+    }
+
+    private fun find(predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo {
+        repeat(40) {
+            if (Build.VERSION.SDK_INT >= 36) automation.clearCache()
+            val pending = ArrayDeque<AccessibilityNodeInfo>()
+            automation.rootInActiveWindow?.let(pending::add)
+            while (pending.isNotEmpty()) {
+                val node = pending.removeFirst()
+                node.refresh()
+                if (predicate(node)) return node
+                repeat(node.childCount) { index -> node.getChild(index)?.let(pending::add) }
+            }
+            Thread.sleep(100)
         }
-        for(label in listOf("バランス","オフ")){
-            for(page in 0 until 8){if(!find{it.isVerticalScroller()}.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD))break;Thread.sleep(1000)}
-            var button=find{it.text?.toString()==label};while(!button.isClickable)button=button.parent
-            assertTrue(button.performAction(AccessibilityNodeInfo.ACTION_CLICK));Thread.sleep(700)
-            repeat(2){scroll(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)}
-            shell("dumpsys gfxinfo jp.noppy.lumamusic reset")
-            val cpu=android.os.Process.getElapsedCpuTime();val wall=android.os.SystemClock.elapsedRealtime()
-            repeat(12){step->scroll(if(step%2==0)AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)}
-            val timing="processCpuMs=${android.os.Process.getElapsedCpuTime()-cpu} wallMs=${android.os.SystemClock.elapsedRealtime()-wall}"
-            val result=shell("dumpsys gfxinfo jp.noppy.lumamusic")
-            val stem=if(label=="オフ")"glass-perf-off"else "glass-perf-balanced"
-            File(ctx.getExternalFilesDir(null),"$stem.txt").writeText(result+"\n"+timing+"\n")
-            File(ctx.getExternalFilesDir(null),"$stem-memory.txt").writeText(shell("dumpsys meminfo jp.noppy.lumamusic"))
-            android.util.Log.i("LumaGlassPerf","$label $timing ${result.lineSequence().filter{it.contains("Total frames")||it.contains("Janky")||it.contains("percentile")}.joinToString("; ")}")
+        error("Missing glass diagnostics control")
+    }
+
+    private fun click(label: String) {
+        val labelNode = find { it.text?.toString() == label }
+        val control = generateSequence(labelNode) { it.parent }.first { it.isClickable }
+        assertTrue("Cannot activate $label", control.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        instrumentation.waitForIdleSync()
+    }
+
+    private fun scrollBackground() {
+        val area = Rect().also { bounds ->
+            find { it.contentDescription?.toString() == "検証用の背景" }.getBoundsInScreen(bounds)
+        }
+        val x = area.left + area.width() / 8
+        val y = area.top + area.height() * 2 / 3
+        // A short, slow gesture advances by less than a screen and avoids a fling.
+        val travel = maxOf(31, area.height() / 17)
+        ParcelFileDescriptor.AutoCloseInputStream(
+            automation.executeShellCommand("input swipe $x $y $x ${y - travel} 520"),
+        ).use { it.readBytes() }
+    }
+
+    private fun capture(name: String, verify: (Bitmap) -> Unit) {
+        instrumentation.waitForIdleSync()
+        Thread.sleep(430)
+        val bitmap = checkNotNull(automation.takeScreenshot()) { "Missing screenshot $name" }
+        try {
+            File(context.getExternalFilesDir(null), "$name.png").outputStream().use {
+                assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+            verify(bitmap)
+        } finally {
+            bitmap.recycle()
         }
     }
-    @Test fun liveScrollQualityAndRotation() {
-        val i=InstrumentationRegistry.getInstrumentation()
-        val ctx=i.targetContext
-        launchDemo()
-        fun nodes():List<AccessibilityNodeInfo> {
-            val root=i.uiAutomation.rootInActiveWindow?:error("No active window")
-            val out=mutableListOf<AccessibilityNodeInfo>();val pending=ArrayDeque<AccessibilityNodeInfo>();pending.add(root)
-            while(pending.isNotEmpty()){val n=pending.removeFirst();n.refresh();out.add(n);for(x in 0 until n.childCount)n.getChild(x)?.let(pending::add)}
-            return out
+
+    private fun changedRatio(before: Bitmap, after: Bitmap, area: Rect): Double {
+        var changed = 0
+        for (y in area.top until area.bottom) {
+            for (x in area.left until area.right) {
+                val a = before.getPixel(x, y)
+                val b = after.getPixel(x, y)
+                val delta = abs(Color.red(a) - Color.red(b)) + abs(Color.blue(a) - Color.blue(b))
+                if (delta >= 80) changed++
+            }
         }
-        fun shot(name:String) { val b=i.uiAutomation.takeScreenshot()?:error("No screenshot");File(ctx.getExternalFilesDir(null),"$name.png").outputStream().use{b.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};b.recycle() }
-        shot("glass-spike-before")
-        val scroll=nodes().firstOrNull{it.isVerticalScroller()}?:error("No vertical scroll semantics")
-        assertTrue("Accessibility scroll must dispatch",scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))
-        Thread.sleep(700);shot("glass-spike-after")
-        for(label in listOf("高品質","軽量","オフ","バランス")) {
-            var button=nodes().firstOrNull{it.text?.toString()==label}?:error("No quality $label")
-            while(!button.isClickable) button=button.parent?:error("No clickable ancestor for $label")
-            assertTrue(button.performAction(AccessibilityNodeInfo.ACTION_CLICK));Thread.sleep(1200)
-            shot("glass-spike-$label")
-            assertTrue("Updated label $label: ${nodes().mapNotNull{it.text}.joinToString()}",nodes().any{it.text?.toString()?.contains("· $label")==true})
-        }
-        var activity:android.app.Activity?=null
-        i.runOnMainSync{activity=ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).firstOrNull()}
-        val a=activity?:error("No resumed activity");val prior=a.requestedOrientation
-        try { i.runOnMainSync{a.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE};Thread.sleep(1000);shot("glass-spike-landscape") }
-        finally { i.runOnMainSync{a.requestedOrientation=prior} }
+        return changed.toDouble() / (area.width() * area.height())
     }
 }

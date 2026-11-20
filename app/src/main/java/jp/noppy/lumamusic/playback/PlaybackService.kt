@@ -23,6 +23,7 @@ import jp.noppy.lumamusic.LumaApp
 import jp.noppy.lumamusic.MainActivity
 import jp.noppy.lumamusic.R
 import jp.noppy.lumamusic.core.PcmSpec
+import jp.noppy.lumamusic.core.SmartShuffleCheckpoint
 import jp.noppy.lumamusic.core.dsp.SoundMode
 import jp.noppy.lumamusic.audio.*
 import androidx.media3.extractor.metadata.vorbis.VorbisComment
@@ -40,6 +41,7 @@ import kotlin.random.Random
 class PlaybackService : MediaSessionService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var player: ExoPlayer
+    private lateinit var shuffle: PlaybackShuffle
     private var session: MediaSession? = null
     private val app get() = application as LumaApp
     private var restored = false
@@ -93,13 +95,14 @@ class PlaybackService : MediaSessionService() {
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
+        shuffle = PlaybackShuffle(player)
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setAudioOffloadPreferences(
             TrackSelectionParameters.AudioOffloadPreferences.Builder().setAudioOffloadMode(
                 TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED).build()).build()
         // Remain conservative before asynchronous preferences arrive.
         app.output.processingIsUnchanged(false)
         val activity = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        session = MediaSession.Builder(this, SessionQueuePlayer(player))
+        session = MediaSession.Builder(this, SessionQueuePlayer(player, shuffle::beforePlay))
             .setSessionActivity(activity)
             .setCallback(SessionCallbacks())
             .build()
@@ -114,6 +117,12 @@ class PlaybackService : MediaSessionService() {
         })
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
+                val transportChanged = events.containsAny(
+                    Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_IS_PLAYING_CHANGED,
+                    Player.EVENT_PLAY_WHEN_READY_CHANGED, Player.EVENT_PLAYBACK_STATE_CHANGED,
+                    Player.EVENT_PLAYBACK_SUPPRESSION_REASON_CHANGED, Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED,
+                )
+                if (transportChanged || events.contains(Player.EVENT_TIMELINE_CHANGED)) shuffle.update()
                 if (events.containsAny(
                         Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_POSITION_DISCONTINUITY,
                         Player.EVENT_IS_PLAYING_CHANGED, Player.EVENT_PLAYBACK_STATE_CHANGED,
@@ -121,7 +130,7 @@ class PlaybackService : MediaSessionService() {
                     )
                 ) sampleListening()
                 if (events.contains(Player.EVENT_TIMELINE_CHANGED)) refreshQueueMetadata()
-                if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_PLAY_WHEN_READY_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED, Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_POSITION_DISCONTINUITY)) save()
+                if (transportChanged || events.containsAny(Player.EVENT_REPEAT_MODE_CHANGED, Player.EVENT_POSITION_DISCONTINUITY)) save()
                 else if (events.contains(Player.EVENT_TIMELINE_CHANGED)) save(queueOnly = true)
             }
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
@@ -279,6 +288,7 @@ class PlaybackService : MediaSessionService() {
         if (order != null) {
             player.setShuffleOrder(DefaultShuffleOrder(order.afterQueueInsertion(insertionIndex, insertAfter), Random.nextLong()))
         }
+        if (insertAfter != null) shuffle.rememberPlayNext(insertionIndex)
         save()
         return SessionResult(SessionResult.RESULT_SUCCESS)
     }
@@ -287,25 +297,33 @@ class PlaybackService : MediaSessionService() {
         val saved = app.settings.snapshot.first()
         // A new queue from the UI wins if it arrives while SAF files are being checked.
         if (player.mediaItemCount == 0) {
-            player.repeatMode = when (saved.repeat) {
-                Player.REPEAT_MODE_ALL, Player.REPEAT_MODE_ONE -> saved.repeat
-                else -> Player.REPEAT_MODE_OFF
-            }
-            player.shuffleModeEnabled = saved.shuffle
             val readable = withContext(Dispatchers.IO) {
                 saved.uris.mapIndexedNotNull { index, uri ->
                     app.library.dao.track(uri)?.takeIf(::isReadable)?.let { index to it }
                 }
             }
+            if (player.mediaItemCount == 0) {
+                player.repeatMode = when (saved.repeat) {
+                    Player.REPEAT_MODE_ALL, Player.REPEAT_MODE_ONE -> saved.repeat
+                    else -> Player.REPEAT_MODE_OFF
+                }
+                player.shuffleModeEnabled = saved.shuffle
+            }
             if (readable.isNotEmpty() && player.mediaItemCount == 0) {
                 val selected = readable.indexOfFirst { (index, _) -> index >= saved.index }.let { if (it < 0) readable.lastIndex else it }
                 val position = if (readable[selected].first == saved.index) saved.position.coerceAtLeast(0) else 0
                 player.setMediaItems(readable.map { (_, track) -> track.mediaItem() }, selected, position)
-                if (saved.shuffleOrder.isWindowPermutation(saved.uris.size)) {
-                    val remappedIndices = readable.mapIndexed { index, (oldIndex, _) -> oldIndex to index }.toMap()
+                val remappedIndices = readable.mapIndexed { index, (oldIndex, _) -> oldIndex to index }.toMap()
+                val validOrder = saved.shuffleOrder.isWindowPermutation(saved.uris.size)
+                if (validOrder) {
                     val restoredOrder = saved.shuffleOrder.mapNotNull(remappedIndices::get).toIntArray()
                     player.setShuffleOrder(DefaultShuffleOrder(restoredOrder, Random.nextLong()))
                 }
+                val checkpoint = saved.shuffleCheckpoint ?: SmartShuffleCheckpoint(
+                    // Existing installs already store the order and cursor. Migrate that prefix as the current round.
+                    visited = if (saved.shuffle && validOrder) saved.shuffleOrder.take(saved.shuffleOrder.indexOf(saved.index) + 1) else emptyList(),
+                )
+                shuffle.restore(checkpoint, saved.index, remappedIndices, reconcileOrder = saved.shuffleCheckpoint == null)
                 player.prepare()
             }
         }
@@ -348,6 +366,7 @@ class PlaybackService : MediaSessionService() {
         repeat = player.repeatMode,
         shuffle = player.shuffleModeEnabled,
         shuffleOrder = player.currentTimeline.shuffledOrder(),
+        shuffleCheckpoint = shuffle.checkpoint(System.currentTimeMillis()),
     )
     private fun save(queueOnly: Boolean = false) {
         if (!restored) return
@@ -355,7 +374,11 @@ class PlaybackService : MediaSessionService() {
         val last = lastScheduledSnapshot
         // Enrichment changes Timeline metadata, not the queue. Keep position writes on the
         // normal timer/transport events rather than writing DataStore for every artwork tag.
-        if (queueOnly && last != null && value.copy(position = last.position) == last) return
+        if (value == last) return
+        if (queueOnly && last != null && value.copy(
+                position = last.position,
+                shuffleCheckpoint = value.shuffleCheckpoint?.copy(inactiveSinceMillis = last.shuffleCheckpoint?.inactiveSinceMillis),
+            ) == last) return
         lastScheduledSnapshot = value
         scope.launch { app.settings.saveSnapshot(value) }
     }
@@ -377,9 +400,19 @@ class PlaybackService : MediaSessionService() {
 
 /** Translate generic notification and headset skip commands to explicit media-item navigation. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-private class SessionQueuePlayer(private val engine: Player) : ForwardingPlayer(engine) {
+private class SessionQueuePlayer(private val engine: Player, private val beforePlay: () -> Unit) : ForwardingPlayer(engine) {
     override fun seekToPrevious() = seekToPreviousMediaItem()
     override fun seekToNext() = seekToNextMediaItem()
+
+    override fun play() {
+        beforePlay()
+        engine.play()
+    }
+
+    override fun setPlayWhenReady(playWhenReady: Boolean) {
+        if (playWhenReady) beforePlay()
+        engine.playWhenReady = playWhenReady
+    }
 
     override fun seekToPreviousMediaItem() {
         if (engine.neighborIndex(forward = false) != null) engine.seekToPreviousMediaItem()

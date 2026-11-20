@@ -27,7 +27,6 @@ internal object LumaDock {
     val BottomMargin = 12.dp
     val PanelGap = 10.dp
     val ListClearance = 8.dp
-    const val MiniRadius = 24
     const val NavigationRadius = 32
     const val MiniArtistHideAt = .84f
     const val MiniNextHideAt = .52f

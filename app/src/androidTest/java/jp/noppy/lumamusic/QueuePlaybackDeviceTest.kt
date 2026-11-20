@@ -165,9 +165,22 @@ class QueuePlaybackDeviceTest {
                 ui.repeat()
             }
             await("Repeat ONE cycles back to OFF") { ui.state.value.repeat == Player.REPEAT_MODE_OFF }
-            main { observer.seekToDefaultPosition(observer.currentTimeline.getLastWindowIndex(true)) }
+            val round = linkedSetOf(tracks[1].uri)
+            repeat(expectedBase.size - 1) {
+                lateinit var destination: String
+                main {
+                    destination = checkNotNull(ui.state.value.nextItem).mediaId
+                    assertTrue(ui.next())
+                }
+                await("Next advances to the item displayed in the shuffle queue") {
+                    observer.currentMediaItem?.mediaId == destination && ui.state.value.mediaId == destination
+                }
+                assertTrue("A shuffled round must not repeat a track", round.add(destination))
+            }
+            assertEquals(expectedBase.toSet(), round)
+            val completedTail = round.last()
             await("Last shuffled item has no Next under Repeat OFF") {
-                ui.state.value.mediaId == tracks[4].uri && ui.state.value.nextIndex == null
+                ui.state.value.mediaId == completedTail && ui.state.value.nextIndex == null
             }
             main {
                 assertFalse(ui.next())
@@ -190,12 +203,14 @@ class QueuePlaybackDeviceTest {
                 withTimeout(10_000) {
                     app.settings.snapshot.first { snapshot ->
                         snapshot.uris == expectedBase && snapshot.shuffle && snapshot.repeat == Player.REPEAT_MODE_ALL &&
-                            snapshot.uris.getOrNull(snapshot.index) == wrappedItem && snapshot.shuffleOrder.size == 5
+                            snapshot.uris.getOrNull(snapshot.index) == wrappedItem && snapshot.shuffleOrder.size == 5 &&
+                            snapshot.shuffleCheckpoint?.visited == listOf(snapshot.index)
                     }
                 }
             }
             assertEquals((0..4).toSet(), saved.shuffleOrder.toSet())
-            assertEquals(tracks[4].uri, saved.uris[saved.shuffleOrder.last()])
+            assertNotEquals(completedTail, wrappedItem)
+            assertEquals(completedTail, saved.uris[saved.shuffleOrder.last()])
             main { observer.setMediaItems(listOf(tracks.first().mediaItem())); observer.prepare() }
             await("One item supports Repeat but offers no adjacent item or Shuffle") {
                 val state = ui.state.value

@@ -39,9 +39,10 @@ import jp.noppy.lumamusic.data.*
             Row(Modifier.horizontalScroll(rememberScrollState())) { listOf("system" to "自動", "dark" to "ダーク", "light" to "ライト").forEach { (key, label) -> FilterChip(prefs.theme == key, { vm.action { vm.settings.text("theme", key) } }, label = { Text(label) }, border = null, shape = LumaShapes.Pill, modifier = Modifier.padding(end = 6.dp)) } }
             Text("ガラスの描画品質", style = MaterialTheme.typography.titleMedium)
             Row(Modifier.horizontalScroll(rememberScrollState())) { GlassQuality.entries.forEach { quality -> FilterChip(prefs.glassQuality == quality.name, { vm.action { vm.settings.text("glassQuality", quality.name) } }, label = { Text(quality.label) }, border = null, shape = LumaShapes.Pill, modifier = Modifier.padding(end = 6.dp)) } }
-            Text("高品質は屈折を強め、軽量はぼかしだけを使用します。オフは通常パネルです。省電力中やアニメーション軽減時は負荷を抑えます。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("高品質では背景の屈折を強めます。軽量では屈折を省き、オフでは通常パネルを表示します。省電力中やアニメーション軽減時は描画の負荷を抑えます。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (android.os.Build.VERSION.SDK_INT < 31) Text("この端末では通常パネルを使用します。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             else if (android.os.Build.VERSION.SDK_INT < 33) Text("この端末では屈折を省き、ぼかしで表示します。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else if (LocalGlassQuality.current == GlassQuality.OFF && prefs.glassQuality != GlassQuality.OFF.name) Text("端末のコントラスト設定に合わせて通常パネルを表示します。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (LocalGlassQuality.current.name != prefs.glassQuality) Text("現在の描画: ${LocalGlassQuality.current.label}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ToggleRow("アニメーションを軽減", prefs.reducedMotion) { vm.action { vm.settings.boolean("motion", it) } }
         }

@@ -52,7 +52,6 @@ import jp.noppy.lumamusic.playback.PlaybackUi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -84,7 +83,7 @@ import kotlin.math.sin
     val reduced = LocalReducedMotion.current
     val lift by animateFloatAsState(if (pressed && !reduced) .65f else 0f, label = "mini player lens lift")
     Box(modifier.fillMaxWidth()) {
-        DockChrome(Modifier.matchParentSize(), LumaDock.MiniRadius, surfaceOpacity) { lift }
+        DockChrome(Modifier.matchParentSize(), LumaDock.NavigationRadius, surfaceOpacity) { lift }
         Column(Modifier.fillMaxSize().padding(horizontal = lerp(10.dp, 4.dp, compact))) {
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -122,8 +121,8 @@ private val NavigationShadow = Shadow(radius = 14.dp, color = Color.Black.copy(a
 @Composable
 internal fun DockChrome(modifier: Modifier, radius: Int, opacity: Float, lift: () -> Float = { 0f }) {
     if (opacity > .01f) {
-        Box(modifier.graphicsLayer { alpha = opacity }
-            .liquidSurface(radius, highlight = LumaDock.GlassHighlight, shadow = NavigationShadow, lensLift = lift))
+        val layer = if (opacity >= 1f) modifier else modifier.graphicsLayer { alpha = opacity }
+        Box(layer.liquidSurface(radius, highlight = LumaDock.GlassHighlight, shadow = NavigationShadow, lensLift = lift))
     }
 }
 
@@ -137,30 +136,17 @@ private class NavigationLensMotion(private val scope: CoroutineScope) {
     private var settling: Job? = null
     var speedStretch by mutableFloatStateOf(0f)
     var pressed by mutableStateOf(false)
-    private var tapLift by mutableStateOf(false)
-    private var tapJob: Job? = null
-    val lifted by derivedStateOf { pressed || tapLift || visualCenter != null && handoff == null }
+    val lifted by derivedStateOf { pressed || visualCenter != null && handoff == null }
     val canStart: Boolean get() = settling?.isActive != true
 
     fun move(center: Float) { visualCenter = center }
 
     fun reset() {
         settling?.cancel()
-        tapJob?.cancel()
-        tapLift = false
         handoff = null
         visualCenter = null
         speedStretch = 0f
         pressed = false
-    }
-
-    fun liftForTap() {
-        tapJob?.cancel()
-        tapLift = true
-        tapJob = scope.launch {
-            delay(160)
-            tapLift = false
-        }
     }
 
     fun release(pager: PagerState, origin: Int, target: Int, originX: Float, reduced: Boolean, select: (Int) -> Unit) {
@@ -213,14 +199,12 @@ private class NavigationLensMotion(private val scope: CoroutineScope) {
     val select by rememberUpdatedState(onSelect)
     val motion = remember(scope) { NavigationLensMotion(scope) }
     val tabInteractions = remember { List(LumaTabs.size) { MutableInteractionSource() } }
-    val selectedTabPressed by key(pager.settledPage) {
-        tabInteractions[pager.settledPage].collectIsPressedAsState()
-    }
+    val tabPresses = tabInteractions.map { it.collectIsPressedAsState() }
     var measuredSize by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(measuredSize, swipeEnabled, reduced) { motion.reset() }
     val lift by animateFloatAsState(
-        if ((selectedTabPressed || motion.lifted || pager.isScrollInProgress) && !reduced) 1f else 0f,
-        spring(dampingRatio = .76f, stiffness = Spring.StiffnessMedium),
+        if ((tabPresses.any { it.value } || motion.lifted || pager.isScrollInProgress) && !reduced) 1f else 0f,
+        spring(dampingRatio = .8f, stiffness = Spring.StiffnessMediumLow * 2f),
         label = "navigation lens lift",
     )
 
@@ -245,7 +229,6 @@ private class NavigationLensMotion(private val scope: CoroutineScope) {
                     }
                     NavigationTab(tab, pager, index, reduced, compact, tabInteractions[index], {
                         motion.reset()
-                        if (!reduced) motion.liftForTap()
                         select(index)
                     }, anchor)
                 }
@@ -303,13 +286,17 @@ private fun Modifier.dragNavigationLens(
         }
         velocity.addPosition(drag.uptimeMillis, drag.position)
         var activePointerId = drag.id
+        var lastSpeed = 0f
         followFinger()
         val released = try {
             horizontalDrag(drag.id) { change ->
                 val dx = change.positionChange().x
                 delta += dx
                 val elapsed = (change.uptimeMillis - change.previousUptimeMillis).coerceAtLeast(1)
-                motion.speedStretch = (abs(dx) * 1000f / elapsed / 1500.dp.toPx()).coerceIn(0f, 1f) * .035f
+                val speed = (abs(dx) * 1000f / elapsed / 1500.dp.toPx()).coerceIn(0f, 1f)
+                val stretch = speed * .032f + (speed - lastSpeed).coerceAtLeast(0f) * .014f
+                motion.speedStretch = motion.speedStretch * .6f + stretch * .4f
+                lastSpeed = speed
                 if (change.id != activePointerId) {
                     activePointerId = change.id
                     velocity.resetTracking()
@@ -356,10 +343,10 @@ private fun Modifier.positionNavigationLens(
     val restWidth = (start.width + (end.width - start.width) * fraction).coerceAtLeast(1f)
     val stretch = if (reduced) 1f else motion.stretch(page, center, restWidth)
     val raised = lift().coerceIn(0f, 1f)
-    val width = (restWidth * stretch * (.92f + (.28f - .07f * compact) * raised))
+    val width = (restWidth * stretch * (.95f + (.16f - .045f * compact) * raised))
         .roundToInt().coerceIn(1, constraints.maxWidth)
-    val height = (constraints.maxHeight * (.84f + .30f * raised)).roundToInt().coerceAtLeast(1)
-    val rise = (10.dp.toPx() * raised).roundToInt()
+    val height = (constraints.maxHeight * (.86f + .18f * raised)).roundToInt().coerceAtLeast(1)
+    val rise = (5.dp.toPx() * raised).roundToInt()
     val lens = measurable.measure(Constraints.fixed(width, height))
     layout(constraints.maxWidth, constraints.maxHeight) {
         lens.place((center - width / 2f).roundToInt(), (constraints.maxHeight - height) / 2 - rise)
@@ -386,7 +373,9 @@ internal fun lensDragTarget(origin: Int, last: Int, delta: Float, distance: Floa
 ) {
     val chosen = pager.settledPage == index
     val strength = (1f - abs(pager.indicatorPage(reduced) - index)).coerceIn(0f, 1f)
-    val tint = lerp(LocalContentColor.current.copy(alpha = .79f), MaterialTheme.colorScheme.primary, strength)
+    val ink = LocalContentColor.current
+    val selectedInk = lerp(ink, MaterialTheme.colorScheme.primary, .48f)
+    val tint = lerp(ink, selectedInk, strength)
     Column(
         modifier.heightIn(min = lerp(56.dp, 48.dp, compact)).clip(LumaShapes.Pill)
             .selectable(chosen, interactionSource = interactions, indication = LocalIndication.current, role = Role.Tab, onClick = onSelect)

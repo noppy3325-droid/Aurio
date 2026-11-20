@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import jp.noppy.lumamusic.core.OutputMode
+import jp.noppy.lumamusic.core.SmartShuffleCheckpoint
 import jp.noppy.lumamusic.core.dsp.*
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -31,6 +32,7 @@ data class PlaybackSnapshot(
     val repeat: Int = 0,
     val shuffle: Boolean = false,
     val shuffleOrder: List<Int> = emptyList(),
+    val shuffleCheckpoint: SmartShuffleCheckpoint? = null,
 )
 
 class SettingsRepository(context: Context) {
@@ -66,21 +68,43 @@ class SettingsRepository(context: Context) {
             val json = JSONObject(p[stringPreferencesKey("queue")] ?: "{}")
             val queue = json.optJSONArray("uris") ?: JSONArray()
             val order = json.optJSONArray("shuffleOrder") ?: JSONArray()
+            val checkpoint = json.optJSONObject("smartShuffle")
             PlaybackSnapshot(
                 (0 until queue.length()).map(queue::getString), json.optInt("index"), json.optLong("position"),
                 json.optInt("repeat"), json.optBoolean("shuffle"),
                 (0 until order.length()).map { order.optInt(it, -1) },
+                checkpoint?.let {
+                    SmartShuffleCheckpoint(
+                        visited = it.optJSONArray("visited").indices(),
+                        inactiveSinceMillis = it.optLong("inactiveSince", -1).takeIf { value -> value >= 0 },
+                        roundReady = it.optBoolean("roundReady"),
+                        previousRoundTail = it.optInt("roundTail", -1).takeIf { value -> value >= 0 },
+                        playNext = it.optJSONArray("playNext").indices(),
+                    )
+                },
             )
         }.getOrDefault(PlaybackSnapshot(emptyList()))
     }
     suspend fun saveSnapshot(value: PlaybackSnapshot) {
-        val encoded = JSONObject().put("uris", JSONArray(value.uris)).put("index", value.index)
+        val payload = JSONObject().put("uris", JSONArray(value.uris)).put("index", value.index)
             .put("position", value.position).put("repeat", value.repeat).put("shuffle", value.shuffle)
-            .put("shuffleOrder", JSONArray(value.shuffleOrder)).toString()
-        store.edit { it[stringPreferencesKey("queue")] = encoded }
+            .put("shuffleOrder", JSONArray(value.shuffleOrder))
+        value.shuffleCheckpoint?.let {
+            payload.put("smartShuffle", JSONObject()
+                .put("visited", JSONArray(it.visited))
+                .put("inactiveSince", it.inactiveSinceMillis ?: -1L)
+                .put("roundReady", it.roundReady)
+                .put("roundTail", it.previousRoundTail ?: -1)
+                .put("playNext", JSONArray(it.playNext)))
+        }
+        store.edit { it[stringPreferencesKey("queue")] = payload.toString() }
     }
     suspend fun mode(mode: OutputMode) { store.edit { it[stringPreferencesKey("mode")] = mode.name } }
     suspend fun boolean(key: String, value: Boolean) { store.edit { it[booleanPreferencesKey(key)] = value } }
     suspend fun number(key: String, value: Float) { store.edit { it[floatPreferencesKey(key)] = value } }
     suspend fun text(key: String, value: String) { store.edit { it[stringPreferencesKey(key)] = value } }
 }
+
+private fun JSONArray?.indices(): List<Int> = this?.let { array ->
+    (0 until array.length()).mapNotNull { index -> array.optInt(index, -1).takeIf { it >= 0 } }
+}.orEmpty()
