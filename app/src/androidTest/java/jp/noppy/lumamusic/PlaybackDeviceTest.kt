@@ -13,6 +13,7 @@ import androidx.media3.session.*
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import jp.noppy.lumamusic.playback.PlaybackService
+import jp.noppy.lumamusic.audio.RouteSelectionStatus
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -68,6 +69,22 @@ class PlaybackDeviceTest {
             await("44.1 kHz playback advances") { controller.isPlaying && controller.currentMediaItem?.mediaId == first.name && controller.currentPosition > 300 }
             val app = context.applicationContext as LumaApp
             await("observed 44.1 kHz route") { app.output.state.value.actual != null && app.output.state.value.track?.rate == 44100 }
+            val speaker = checkNotNull(app.output.state.value.connected.firstOrNull { it.speaker && it.selectable })
+            val savedOutput = app.output.state.value.preferredId
+            try {
+                main { app.output.preferDevice(speaker.id) }
+                await("speaker selected while playing") {
+                    val output = app.output.state.value
+                    output.preferredId == speaker.id && output.actual?.speaker == true &&
+                        output.routeStatus == RouteSelectionStatus.ACTIVE && controller.isPlaying
+                }
+                main { app.output.preferDevice(null) }
+                await("automatic output resumes routing without stopping playback") {
+                    app.output.state.value.routeStatus == RouteSelectionStatus.AUTOMATIC && controller.isPlaying
+                }
+            } finally {
+                main { app.output.preferDevice(savedOutput) }
+            }
             instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
             await("background playback continues") { controller.isPlaying && controller.currentPosition > 1000 }
             val notifications = context.getSystemService(NotificationManager::class.java)

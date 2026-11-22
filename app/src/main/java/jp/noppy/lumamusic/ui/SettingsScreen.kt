@@ -12,9 +12,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+
 import androidx.compose.ui.unit.dp
-import jp.noppy.lumamusic.audio.*
+
 import jp.noppy.lumamusic.core.OutputMode
 import jp.noppy.lumamusic.data.*
 
@@ -25,7 +25,7 @@ import jp.noppy.lumamusic.data.*
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) { IconButton(close) { Icon(Icons.Rounded.ArrowBack, "ライブラリに戻る") }; Text("設定", style = MaterialTheme.typography.headlineLarge) }
         SettingsGroup { Text("サウンド", style = MaterialTheme.typography.titleLarge); TextButton(sound) { Icon(Icons.Rounded.Equalizer, null); Spacer(Modifier.width(8.dp)); Text("Aurio Enhance / Direct") }; Text("音質補正、イコライザー、音量の均一化を調整します。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
-        SettingsGroup { Text("音声出力", style = MaterialTheme.typography.titleLarge); TextButton(output) { Icon(Icons.Rounded.SpeakerGroup, null); Spacer(Modifier.width(8.dp)); Text("出力情報を確認") }
+        SettingsGroup { Text("音声出力", style = MaterialTheme.typography.titleLarge); TextButton(output) { Icon(Icons.Rounded.SpeakerGroup, null); Spacer(Modifier.width(8.dp)); Text("出力先を切り替え") }
             listOf(OutputMode.STANDARD to "通常再生", OutputMode.USB_HIGH_QUALITY to "USBの形式一致を優先", OutputMode.BIT_PERFECT to "ビットパーフェクトを試行").forEach { (mode, title) ->
                 Row(Modifier.fillMaxWidth().clickable { if (mode == OutputMode.BIT_PERFECT) warning = true else vm.mode(mode) }, verticalAlignment = Alignment.CenterVertically) { RadioButton(prefs.mode == mode, { if (mode == OutputMode.BIT_PERFECT) warning = true else vm.mode(mode) }); Text(title) }
             }
@@ -67,23 +67,3 @@ import jp.noppy.lumamusic.data.*
 }
 
 @Composable private fun ToggleRow(label: String, selected: Boolean, onChange: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f)); Switch(selected, onChange) } }
-
-@Composable fun OutputPanel(output: OutputState, track: Track?, playing: Boolean, onClose: () -> Unit) {
-    AlertDialog(onDismissRequest = onClose, title = { Text("音声出力情報") }, text = {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutputField(if (playing) "出力経路" else "直近に確認した経路（停止中）", output.actual?.let { "${it.type} / ${it.name}" } ?: "未確認（停止中または経路確定前）")
-            OutputField("ソース", track?.let { "${it.mime}\n${rateText(it.sampleRate)} / ${it.bitDepth?.let { b -> "$b bit" } ?: "ビット深度未確認"}" } ?: "未選択")
-            OutputField("AudioTrack設定", output.track?.let { "${rateText(it.rate)} / ${it.channels} ch / ${encodingName(it.encoding)}" } ?: "未確認")
-            OutputField("実出力サンプルレート", "未確認（AudioTrack設定はDACの測定値ではありません）")
-            OutputField("再生方式", output.method)
-            OutputField("ビットパーフェクト対応状況", output.bitPerfect)
-            output.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Rose) }
-            HorizontalDivider(); Text("接続機器が報告する仕様", fontWeight = FontWeight.Bold)
-            output.connected.forEach { device ->
-                Text("${device.type} / ${device.name}", fontWeight = FontWeight.SemiBold)
-                Text("対応サンプルレート: ${device.rates.takeIf { it.isNotEmpty() }?.joinToString { rateText(it) } ?: "未列挙（具体値未確認）"}\nチャンネル数: ${device.channels.takeIf { it.isNotEmpty() }?.joinToString() ?: "未列挙"}\nエンコーディング: ${device.encodings.takeIf { it.isNotEmpty() }?.joinToString { encodingName(it) } ?: "未取得"}", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }, confirmButton = { TextButton(onClose) { Text("閉じる") } })
-}
-@Composable private fun OutputField(label: String, value: String) { Column { Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant); Text(value, style = MaterialTheme.typography.bodyMedium) } }

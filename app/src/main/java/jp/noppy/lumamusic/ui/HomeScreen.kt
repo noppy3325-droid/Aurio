@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,25 +22,21 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import jp.noppy.lumamusic.data.*
 import kotlinx.coroutines.flow.first
-import java.text.DateFormat
-import java.util.Date
 
 @Composable
 internal fun HomeScreen(vm: LumaViewModel, tracks: List<Track>, users: List<UserTrack>, playlists: List<MusicPlaylist>, addFolder: () -> Unit, openPlayer: () -> Unit, bottomContentPadding: Dp, active: Boolean) {
     val history by vm.history.collectAsStateWithLifecycle()
     val playback by vm.playbackSummary.collectAsStateWithLifecycle()
     val recommendations by vm.homeFeed.collectAsStateWithLifecycle()
-    var showHistory by rememberSaveable { mutableStateOf(false) }
-    var confirmClear by remember { mutableStateOf(false) }
+    var recordsTab by rememberSaveable { mutableStateOf<RecordsTab?>(null) }
     val homeList = rememberLazyListState()
-    val historyList = rememberLazyListState()
     val featuredList = rememberLazyListState()
     val frequentList = rememberLazyListState()
     val rediscoverList = rememberLazyListState()
     var touchInProgress by remember { mutableStateOf(false) }
     var displayedFeed by remember { mutableStateOf(recommendations) }
-    LaunchedEffect(recommendations, active, showHistory) {
-        if (active && !showHistory) {
+    LaunchedEffect(recommendations, active, recordsTab == null) {
+        if (active && recordsTab == null) {
             snapshotFlow {
                 !touchInProgress && !homeList.isScrollInProgress && !featuredList.isScrollInProgress &&
                     !frequentList.isScrollInProgress && !rediscoverList.isScrollInProgress
@@ -49,7 +44,7 @@ internal fun HomeScreen(vm: LumaViewModel, tracks: List<Track>, users: List<User
             displayedFeed = recommendations
         }
     }
-    BackHandler(active && showHistory) { showHistory = false }
+    BackHandler(active && recordsTab != null) { recordsTab = null }
     val byUri = remember(tracks) { tracks.associateBy { it.uri } }
     val availableHistory = remember(history, byUri) {
         val byStableId by lazy(LazyThreadSafetyMode.NONE) { tracks.associateBy { stableTrackId(it.uri) } }
@@ -63,7 +58,13 @@ internal fun HomeScreen(vm: LumaViewModel, tracks: List<Track>, users: List<User
     val frequent = remember(displayedFeed.frequent, byUri) { displayedFeed.frequent.mapNotNull(byUri::get) }
     val rediscover = remember(displayedFeed.rediscover, byUri) { displayedFeed.rediscover.mapNotNull(byUri::get) }
     val favorites = remember(users) { users.filter { it.favorite }.map { it.uri }.toSet() }
-    val dateFormat = remember { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT) }
+    recordsTab?.let { tab ->
+        ListeningRecordsScreen(
+            vm, tab, { recordsTab = it }, { recordsTab = null }, history.isNotEmpty(),
+            availableHistory, favorites, playlists, playback, bottomContentPadding, openPlayer,
+        )
+        return
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().pointerInput(Unit) {
@@ -78,73 +79,54 @@ internal fun HomeScreen(vm: LumaViewModel, tracks: List<Track>, users: List<User
                 touchInProgress = false
             }
         },
-        state = if (showHistory) historyList else homeList,
+        state = homeList,
         contentPadding = PaddingValues(bottom = bottomContentPadding + 20.dp),
     ) {
         item {
             Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 20.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (showHistory) IconButton({ showHistory = false }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "戻る") }
-                Text(if (showHistory) "再生履歴" else "ホーム", Modifier.weight(1f), style = MaterialTheme.typography.headlineLarge)
-                if (showHistory && history.isNotEmpty()) TextButton({ confirmClear = true }) { Text("消去") }
-            }
-        }
-        if (showHistory) {
-            if (availableHistory.isEmpty()) item {
-                if (history.isEmpty()) EmptyHome("まだ再生履歴はありません", "曲を聴くと、ここに表示されます。")
-                else EmptyHome("再生できる曲がありません", "音楽フォルダーへのアクセスを確認してください。")
-            }
-            items(availableHistory, key = { it.first.id }) { (entry, track) ->
-                Column(Modifier.padding(horizontal = 24.dp)) {
-                    Text(dateFormat.format(Date(entry.playedAt)), Modifier.padding(start = 4.dp, top = 10.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TrackRow(track, track.uri in favorites, { vm.browseTrack(listOf(track), 0, openPlayer) }, { vm.favorite(track.uri) }, vm, playlists, playback.mediaId == track.uri, playback.playing)
-                }
-            }
-        } else {
-            if (tracks.isEmpty() || displayedFeed.ready && featured.isEmpty()) {
-                item(key = "empty-home") {
-                    EmptyHome("音楽をはじめよう", "音楽フォルダーを追加すると曲が並びます。")
-                    TextButton(addFolder, Modifier.padding(horizontal = 24.dp)) { Icon(Icons.Rounded.CreateNewFolder, null); Spacer(Modifier.width(8.dp)); Text("フォルダーを追加") }
-                }
-            }
-            if (featured.isNotEmpty()) {
-                item(key = "featured") {
-                    HomeShelf(if (displayedFeed.personalized) "あなたへのおすすめ" else "あなたの音楽から", featured, featuredList, 190.dp, vm, openPlayer)
-                }
-            }
-            if (frequent.isNotEmpty()) {
-                item(key = "frequent") {
-                    HomeShelf("よく聴く曲", frequent, frequentList, 134.dp, vm, openPlayer)
-                }
-            }
-            if (rediscover.isNotEmpty()) {
-                item(key = "rediscover") {
-                    HomeShelf("久しぶりに聴きたい曲", rediscover, rediscoverList, 134.dp, vm, openPlayer)
-                }
-            }
-            if (tracks.isNotEmpty() || history.isNotEmpty()) {
-                item(key = "recent") {
-                    Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("最近再生した曲", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        TextButton({ showHistory = true }) { Text("すべて見る") }
-                    }
-                }
-                if (history.isEmpty()) item {
-                    Text("再生履歴はここに表示されます。", Modifier.padding(horizontal = 24.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                items(recent, key = { it.first.id }) { (_, track) ->
-                    Box(Modifier.padding(horizontal = 24.dp)) { TrackRow(track, track.uri in favorites, { vm.browseTrack(listOf(track), 0, openPlayer) }, { vm.favorite(track.uri) }, vm, playlists, playback.mediaId == track.uri, playback.playing) }
+                Text("ホーム", Modifier.weight(1f), style = MaterialTheme.typography.headlineLarge)
+                TextButton({ recordsTab = RecordsTab.Summary }) {
+                    Icon(Icons.Rounded.BarChart, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("再生記録")
                 }
             }
         }
-    }
-    if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("再生履歴を消去") },
-            text = { Text("再生履歴と、おすすめに使う再生統計を消去しますか？") },
-            confirmButton = { TextButton({ vm.clearHistory(); confirmClear = false }) { Text("消去") } },
-            dismissButton = { TextButton({ confirmClear = false }) { Text("キャンセル") } },
-        )
+        if (tracks.isEmpty() || displayedFeed.ready && featured.isEmpty()) {
+            item(key = "empty-home") {
+                EmptyHome("音楽をはじめよう", "音楽フォルダーを追加すると曲が並びます。")
+                TextButton(addFolder, Modifier.padding(horizontal = 24.dp)) { Icon(Icons.Rounded.CreateNewFolder, null); Spacer(Modifier.width(8.dp)); Text("フォルダーを追加") }
+            }
+        }
+        if (featured.isNotEmpty()) {
+            item(key = "featured") {
+                HomeShelf(if (displayedFeed.personalized) "あなたへのおすすめ" else "あなたの音楽から", featured, featuredList, 190.dp, vm, openPlayer)
+            }
+        }
+        if (frequent.isNotEmpty()) {
+            item(key = "frequent") {
+                HomeShelf("よく聴く曲", frequent, frequentList, 134.dp, vm, openPlayer)
+            }
+        }
+        if (rediscover.isNotEmpty()) {
+            item(key = "rediscover") {
+                HomeShelf("久しぶりに聴きたい曲", rediscover, rediscoverList, 134.dp, vm, openPlayer)
+            }
+        }
+        if (tracks.isNotEmpty() || history.isNotEmpty()) {
+            item(key = "recent") {
+                Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("最近再生した曲", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    TextButton({ recordsTab = RecordsTab.History }) { Text("すべて見る") }
+                }
+            }
+            if (history.isEmpty()) item {
+                Text("再生履歴はここに表示されます。", Modifier.padding(horizontal = 24.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            items(recent, key = { it.first.id }) { (_, track) ->
+                Box(Modifier.padding(horizontal = 24.dp)) { TrackRow(track, track.uri in favorites, { vm.browseTrack(listOf(track), 0, openPlayer) }, { vm.favorite(track.uri) }, vm, playlists, playback.mediaId == track.uri, playback.playing) }
+            }
+        }
     }
 }
 

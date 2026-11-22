@@ -31,6 +31,12 @@ class LumaViewModel(application: Application) : AndroidViewModel(application) {
     val playlists = library.playlists.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val entries = library.entries.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val history = library.dao.history().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val playbackStats = library.dao.playbackStats()
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+    internal val listening = combine(tracks, playbackStats) { tracks, stats ->
+        listeningOverview(tracks, stats, ::stableTrackId)
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ListeningOverview())
     private val refreshHomeAt = MutableStateFlow(0L)
     private val recommendationInputs = combine(
         library.tracks.distinctUntilChanged(::sameRankingTracks),
@@ -39,7 +45,7 @@ class LumaViewModel(application: Application) : AndroidViewModel(application) {
         library.entries.map { rows -> rows.map { it.trackUri }.toSet() }.distinctUntilChanged(),
         ::RecommendationInputs,
     )
-    private val lastHistoryById = library.dao.history().map { rows ->
+    private val lastHistoryById = history.map { rows ->
         // The recent list is ordered newest first, including rows from the old DB.
         buildMap { rows.forEach { putIfAbsent(stableTrackId(it.trackUri), it.playedAt) } }
     }
@@ -50,7 +56,7 @@ class LumaViewModel(application: Application) : AndroidViewModel(application) {
         }
     })
     internal val homeFeed = combine(
-        recommendationInputs, library.dao.playbackStats(), lastHistoryById, homeRefresh
+        recommendationInputs, playbackStats, lastHistoryById, homeRefresh
     ) { (tracks, refs, favorites, playlistTracks), stats, lastHistory, refresh ->
         val canRead = app.contentResolver.persistedUriPermissions.asSequence()
             .filter { it.isReadPermission }.map { it.uri.toString() }.toSet()
@@ -67,6 +73,8 @@ class LumaViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
     val preferences = settings.preferences.stateIn(viewModelScope, SharingStarted.Eagerly, Preferences())
     val output = app.output.state
+    fun refreshOutputs() = app.output.refreshDevices()
+    fun selectOutput(id: Int?) = app.output.preferDevice(id)
     val scan = library.scan
     private val mutableMessage = MutableStateFlow<String?>(null)
     private var lastScan = 0L

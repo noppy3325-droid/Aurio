@@ -48,6 +48,7 @@ import jp.noppy.lumamusic.data.Preferences
 import jp.noppy.lumamusic.data.Track
 import jp.noppy.lumamusic.playback.PlaybackUi
 import jp.noppy.lumamusic.ui.audio.SoundSettingsScreen
+import jp.noppy.lumamusic.ui.audio.AudioOutputPanel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
@@ -177,7 +178,9 @@ import kotlin.math.abs
                     }
                 }
                 when {
-                    showSound -> Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) { SoundSettingsScreen(vm) { showSound = false } }
+                    showSound -> Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+                        SoundSettingsScreen(vm, onOutput = { showOutput = true }) { showSound = false }
+                    }
                     standby.active -> LiquidBackdropHost(
                         Modifier.fillMaxSize(),
                         content = { AlbumBackdrop(selected?.artwork ?: playback.artwork, playback.title, reducedMotion, scheme.background) },
@@ -258,7 +261,10 @@ import kotlin.math.abs
                     if (browsing) feedbackPosition.padding(bottom = with(LocalDensity.current) { dockHeightPx.toDp() })
                     else feedbackPosition.navigationBarsPadding().padding(bottom = 12.dp),
                 )
-                if (showOutput) OutputPanel(output, selected, playback.playing) { showOutput = false }
+                if (showOutput) {
+                    LaunchedEffect(Unit) { vm.refreshOutputs() }
+                    AudioOutputPanel(output, selected, playback.playing, vm::selectOutput) { showOutput = false }
+                }
                 val error = message ?: playback.error ?: scan.message.takeIf { !scan.running }
                 if (error != null) {
                     var dismissed by remember(error) { mutableStateOf(false) }

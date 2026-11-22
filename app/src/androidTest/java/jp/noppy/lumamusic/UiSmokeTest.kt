@@ -27,6 +27,9 @@ import jp.noppy.lumamusic.core.dsp.DspConfig
 import jp.noppy.lumamusic.core.dsp.SoundMode
 import jp.noppy.lumamusic.data.Track
 import jp.noppy.lumamusic.data.TrackFolder
+import jp.noppy.lumamusic.data.PlayHistory
+import jp.noppy.lumamusic.data.TrackPlaybackStats
+import jp.noppy.lumamusic.data.stableTrackId
 import jp.noppy.lumamusic.playback.PlaybackService
 import jp.noppy.lumamusic.playback.mediaItem
 import jp.noppy.lumamusic.ui.StandbyController
@@ -183,6 +186,61 @@ class UiSmokeTest {
     private fun tabSelected(label: String): Boolean = nodes().any { node ->
         if (node.text?.toString() != label && node.contentDescription?.toString() != label) return@any false
         generateSequence(node) { it.parent }.take(4).any { it.isSelected }
+    }
+
+    @Test fun opensListeningRecordsAndSwitchesRankingAndHistory() = runBlocking {
+        val fixtureId = UUID.randomUUID().toString()
+        val folder = "luma-records-test:$fixtureId"
+        val directory = File(context.filesDir, "records-fixture-$fixtureId").apply { mkdirs() }
+        val (_, fixtureTracks) = fixture(directory, artworkMatrix = true)
+        val frequent = fixtureTracks[0].copy(title = "Records Test Frequent")
+        val longest = fixtureTracks[1].copy(title = "Records Test Longest")
+        val tracks = listOf(frequent, longest)
+        val time = System.currentTimeMillis()
+        var activity: Activity? = null
+        try {
+            app.database.withTransaction {
+                app.library.dao.upsertTracks(tracks)
+                app.library.dao.refs(tracks.map { TrackFolder(it.uri, folder) })
+                app.library.dao.insertPlaybackStats(TrackPlaybackStats(stableTrackId(frequent.uri), 7, 0, time, time, 130_000))
+                app.library.dao.insertPlaybackStats(TrackPlaybackStats(stableTrackId(longest.uri), 3, 0, time, time, 515_000))
+                app.library.dao.insertHistory(PlayHistory(trackUri = longest.uri, playedAt = time))
+            }
+            activity = instrumentation.startActivitySync(Intent(context, AurioActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+            fun rankingShows(first: String, second: String): Boolean {
+                val entries = nodes().filter { it.isVisibleToUser && it.text?.toString() in listOf(first, second) }
+                return entries.size == 2 && entries.minBy { node ->
+                    android.graphics.Rect().also(node::getBoundsInScreen).top
+                }.text?.toString() == first
+            }
+            eventually("home tab") { tabSelected("ホーム") }
+            click("再生記録")
+            eventually("listening totals and count ranking") {
+                textPresent("合計再生時間") && rankingShows(frequent.title, longest.title)
+            }
+            screenshot("v120-listening-records")
+            click("再生時間順")
+            eventually("duration ranking") { rankingShows(longest.title, frequent.title) }
+            click("履歴")
+            eventually("dated listening history") { textPresent(longest.title) && !textPresent("合計再生時間") }
+            click("戻る")
+            eventually("return to home") { textPresent("最近再生した曲") }
+        } finally {
+            activity?.let { current -> main { current.finish() } }
+            app.database.withTransaction {
+                app.library.dao.clearRefs(folder)
+                val database = app.database.openHelper.writableDatabase
+                tracks.forEach { track ->
+                    database.execSQL("DELETE FROM play_history WHERE trackUri = ?", arrayOf(track.uri))
+                    database.execSQL("DELETE FROM track_playback_stats WHERE stableTrackId = ?", arrayOf(stableTrackId(track.uri)))
+                    database.execSQL("DELETE FROM tracks WHERE uri = ?", arrayOf(track.uri))
+                    database.execSQL("DELETE FROM audio_analysis WHERE uri = ?", arrayOf(track.uri))
+                }
+            }
+            assertTrue(directory.name == "records-fixture-$fixtureId" && directory.parentFile == context.filesDir)
+            directory.deleteRecursively()
+        }
     }
 
     @Test fun pageSwipeAndDirectLensDragUseTheirOwnDirections() {
@@ -735,6 +793,12 @@ class UiSmokeTest {
             frameStats()
             click("設定")
             eventually("settings route") { textPresent("ガラスの描画品質") || textPresent("音楽フォルダー") }
+            click("出力先を切り替え")
+            eventually("output picker shows the observed route and available speaker") {
+                textPresent("実際の出力先") && textPresent("自動") && textPresent("本体スピーカー")
+            }
+            screenshot("v120-audio-output")
+            click("閉じる")
             screenshot("09-settings-light")
             app.settings.text("theme", "dark")
             Thread.sleep(1000)

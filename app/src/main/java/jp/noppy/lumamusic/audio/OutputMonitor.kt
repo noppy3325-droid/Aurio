@@ -1,33 +1,42 @@
 package jp.noppy.lumamusic.audio
 
 import android.content.Context
-import android.media.*
+import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.media.AudioRouting
+import android.media.AudioTrack
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import androidx.annotation.RequiresApi
-import jp.noppy.lumamusic.core.*
+import android.os.SystemClock
+import jp.noppy.lumamusic.core.OutputMode
+import jp.noppy.lumamusic.core.PcmSpec
+import jp.noppy.lumamusic.core.unchangedPcm
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-data class DeviceReport(
-    val id: Int, val name: String, val type: String, val usb: Boolean,
-    val rates: List<Int>, val channels: List<Int>, val encodings: List<Int>,
-)
+private const val STANDARD_PLAYBACK = "Android標準音声再生"
+private const val ROUTE_SETTLE_MS = 3_000L
+
 data class OutputState(
     val connected: List<DeviceReport> = emptyList(),
     val actual: DeviceReport? = null,
     val preferredId: Int? = null,
+    val routeStatus: RouteSelectionStatus = RouteSelectionStatus.AUTOMATIC,
+    val routeMessage: String? = null,
     val track: PcmSpec? = null,
     val requested: OutputMode = OutputMode.USB_HIGH_QUALITY,
-    val method: String = "Android標準音声再生",
+    val method: String = STANDARD_PLAYBACK,
     val bitPerfect: String = "未確認",
     val message: String? = null,
-    val mixerApplied: Boolean = false,
+    val mixerDeviceId: Int? = null,
 ) {
+    val mixerApplied: Boolean get() = mixerDeviceId != null
     val bitPerfectVolumeRestricted: Boolean
-        get() = mixerApplied && requested == OutputMode.BIT_PERFECT && actual?.usb == true
+        get() = requested == OutputMode.BIT_PERFECT && actual?.id != null && actual.id == mixerDeviceId
 }
 
 class OutputMonitor(context: Context) {
@@ -35,220 +44,267 @@ class OutputMonitor(context: Context) {
     private val handler = Handler(Looper.getMainLooper())
     private val mutable = MutableStateFlow(OutputState())
     val state = mutable.asStateFlow()
-    private val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
+    private val attributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+        .build()
     private var engine: AudioOutputEngine = UsbHighQualityEngine()
     private var started = false
     private var track: AudioTrack? = null
-    private var activeId: Int? = null
-    private var preferredId: Int? = null
-    private var appliedDevice: AudioDeviceInfo? = null
-    // Guarded API-34 types stay in MixerApi34, which is only constructed on API 34+.
+    private var lastRoute: DeviceReport? = null
+    private var switchUntil = 0L
     private var mixer: MixerApi34? = null
     private var unprocessed = true
     private var source: PcmSpec? = null
     private var optimizationFailed = false
     private var onDisconnect: (() -> Unit)? = null
+    private var applyPreferred: ((AudioDeviceInfo?) -> Unit)? = null
+
     private val routeListener = AudioRouting.OnRoutingChangedListener { routing ->
         if (routing === track) updateRoute()
     }
     private val callback = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) { refreshDevices(); updateRoute() }
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = refreshDevices()
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-            val removed = removedDevices.filter { it.isSink }.map { it.id }.toSet()
-            if (shouldPauseOnRemoval(activeId, preferredId ?: appliedDevice?.id, removed)) {
-                onDisconnect?.invoke()
-                clearPreference()
-                activeId = null
-                if (preferredId in removed) preferredId = null
-                mutable.update { it.copy(actual = null, preferredId = preferredId, message = "音声機器が取り外されたため一時停止しました") }
-            }
-            refreshDevices()
+            refreshDevices(removedDevices.filter { it.isSink }.mapTo(mutableSetOf()) { it.id })
         }
     }
     private val poll = object : Runnable {
-        override fun run() { if (started) { updateRoute(); handler.postDelayed(this, 700) } }
+        override fun run() {
+            if (!started) return
+            updateRoute()
+            handler.postDelayed(this, 700)
+        }
     }
 
-    fun start(onDisconnect: () -> Unit) {
-        this.onDisconnect = onDisconnect
+    @Synchronized
+    fun start(onDisconnect: () -> Unit, applyPreferred: (AudioDeviceInfo?) -> Unit) {
         if (started) return
         started = true
-        if (Build.VERSION.SDK_INT >= 34) mixer = runCatching { MixerApi34(audio, attributes, handler) { deviceId ->
-            if (appliedDevice?.id == deviceId) {
-                mutable.update { it.copy(mixerApplied = false, method = "Android標準音声再生", bitPerfect = "設定変更・実出力未確認", message = "ミキサー設定が解除または変更されました") }
-            }
-        } }.getOrNull()
-        audio.registerAudioDeviceCallback(callback, handler)
+        this.onDisconnect = onDisconnect
+        this.applyPreferred = applyPreferred
+        if (Build.VERSION.SDK_INT >= 34) {
+            mixer = runCatching { MixerApi34(audio, attributes, handler, ::mixerInvalidated) }.getOrNull()
+        }
         refreshDevices()
+        mutable.value.preferredId?.let { applyPreferred(device(it)) }
+        audio.registerAudioDeviceCallback(callback, handler)
         handler.post(poll)
     }
 
-    @Synchronized fun mode(value: OutputMode) {
+    fun refreshDevices() = refreshDevices(emptySet())
+
+    @Synchronized
+    private fun refreshDevices(removedIds: Set<Int>) {
+        val connected = devices()
+        val ids = connected.mapTo(mutableSetOf()) { it.id }
+        val previous = lastRoute
+        val preferred = mutable.value.preferredId
+        val preferredRemoved = preferred != null && preferred !in ids
+        val activeRemoved = previous != null && previous.id in removedIds
+        if (activeRemoved || preferredRemoved) {
+            if (activeRemoved) lastRoute = null
+            clearMixer()
+            switchUntil = 0
+            mutable.update {
+                it.copy(
+                    actual = if (activeRemoved) null else it.actual,
+                    preferredId = if (preferredRemoved) null else preferred,
+                    routeMessage = if (activeRemoved) "出力機器が外れたため一時停止しました" else
+                        "選んだ機器が外れたため自動に戻しました",
+                )
+            }
+            if (activeRemoved) onDisconnect?.invoke()
+            if (preferredRemoved) applyPreferred?.invoke(null)
+        }
+        val reports = connected.map(AudioDeviceInfo::toReport)
+            .sortedWith(compareByDescending<DeviceReport> { it.selectable && it.speaker }.thenBy { it.name })
+        mutable.update { it.copy(connected = reports) }
+        updateRoute()
+    }
+
+    @Synchronized
+    fun preferDevice(id: Int?) {
+        refreshDevices()
+        val target = id?.let(::device)
+        if (id != null && target?.mediaOutputType() == null) {
+            mutable.update { it.copy(routeMessage = "機器が見つかりません。接続を確認してください") }
+            return
+        }
+        if (mutable.value.preferredId == id && mutable.value.routeStatus != RouteSelectionStatus.MISMATCH) return
+        switchUntil = SystemClock.elapsedRealtime() + ROUTE_SETTLE_MS
+        clearMixer()
+        mutable.update { it.copy(preferredId = id, routeMessage = null) }
+        applyPreferred?.invoke(target)
+        // Media3 can change the route without reopening the AudioTrack.
+        updateRoute()
+        val output = mutable.value
+        if (output.actual != null && output.actual.id == target?.id) {
+            configure(output.track, track?.format?.channelMask ?: 0)
+        }
+    }
+
+    @Synchronized
+    fun mode(value: OutputMode) {
         if (engine.mode == value) return
         optimizationFailed = false
-        engine = when (value) { OutputMode.STANDARD -> StandardMedia3Engine(); OutputMode.USB_HIGH_QUALITY -> UsbHighQualityEngine(); OutputMode.BIT_PERFECT -> UsbBitPerfectEngine() }
-        clearPreference()
+        engine = when (value) {
+            OutputMode.STANDARD -> StandardMedia3Engine()
+            OutputMode.USB_HIGH_QUALITY -> UsbHighQualityEngine()
+            OutputMode.BIT_PERFECT -> UsbBitPerfectEngine()
+        }
+        clearMixer()
         mutable.update { it.copy(requested = value) }
         configure(mutable.value.track, track?.format?.channelMask ?: 0)
     }
 
-    @Synchronized fun processingIsUnchanged(value: Boolean) {
+    @Synchronized
+    fun processingIsUnchanged(value: Boolean) {
         if (unprocessed == value) return
         unprocessed = value
-        clearPreference()
+        clearMixer()
         configure(mutable.value.track, track?.format?.channelMask ?: 0)
     }
 
-    fun device(id: Int?): AudioDeviceInfo? = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull { it.id == id }
-    fun preferDevice(id: Int?) {
-        clearPreference()
-        preferredId = id
-        mutable.update { it.copy(preferredId = id, actual = null) }
-    }
-
     /** Called before AudioTrack creation, using the actual PCM configuration produced by Media3. */
-    @Synchronized fun configure(spec: PcmSpec?, channelMask: Int) {
+    @Synchronized
+    fun configure(spec: PcmSpec?, channelMask: Int) {
         mutable.update { it.copy(track = spec) }
-        val anticipated = if (preferredId != null) device(preferredId) else if (Build.VERSION.SDK_INT >= 33)
-            runCatching { audio.getAudioDevicesForAttributes(attributes).singleOrNull() }.getOrNull() else device(activeId)
-        val target = anticipated?.takeIf { isUsb(it) }
+        val target = anticipatedDevice()?.takeIf(::isUsb)
         if (target == null || spec == null || engine.mode == OutputMode.STANDARD || optimizationFailed) {
-            clearPreference(); return
+            clearMixer(preserveMessage = optimizationFailed)
+            return
         }
         val api = mixer
         if (Build.VERSION.SDK_INT < 34 || api == null) {
-            clearPreference()
-            mutable.update { it.copy(bitPerfect = if (Build.VERSION.SDK_INT < 34) "このOSではAPI非対応" else "ミキサーAPI利用不可・未確認", message = "Android標準音声再生を使用します") }
+            clearMixer()
+            val status = if (Build.VERSION.SDK_INT < 34) "このOSではAPI非対応" else "ミキサーAPI利用不可・未確認"
+            mutable.update { it.copy(bitPerfect = status, message = "Android標準音声再生を使用します") }
             return
         }
-        if (appliedDevice?.id != target.id) clearPreference()
-        val result = api.apply(target, spec, channelMask, engine, unprocessed && unchangedPcm(source, spec, 1f, 1f, false))
-        appliedDevice = target.takeIf { result.applied }
-        mutable.update { it.copy(
-            method = if (result.applied) if (engine.mode == OutputMode.BIT_PERFECT) "USB / BIT_PERFECT API設定（実出力未確認）" else "USB / 形式一致のミキサー希望設定済み" else "Android標準音声再生",
-            bitPerfect = result.bitPerfect,
-            message = result.message,
-            mixerApplied = result.applied,
-        ) }
+        if (mutable.value.mixerDeviceId != target.id) clearMixer()
+        val unchanged = unprocessed && unchangedPcm(source, spec, 1f, 1f, false)
+        val result = api.apply(target, spec, channelMask, engine, unchanged)
+        val method = when {
+            !result.applied -> STANDARD_PLAYBACK
+            engine.mode == OutputMode.BIT_PERFECT -> "USB / BIT_PERFECT API設定（実出力未確認）"
+            else -> "USB / 形式一致のミキサー希望設定済み"
+        }
+        mutable.update {
+            it.copy(method = method, bitPerfect = result.bitPerfect, message = result.message,
+                mixerDeviceId = target.id.takeIf { result.applied })
+        }
     }
 
     fun observe(newTrack: AudioTrack) {
         handler.post {
-            track?.let { runCatching { it.removeOnRoutingChangedListener(routeListener) } }
-            track = newTrack
-            activeId = null
-            mutable.update { it.copy(actual = null) }
-            newTrack.addOnRoutingChangedListener(routeListener, handler)
-            updateRoute()
+            synchronized(this) {
+                if (!started) return@synchronized
+                stopObservingTrack()
+                track = newTrack
+                newTrack.addOnRoutingChangedListener(routeListener, handler)
+                updateRoute()
+            }
         }
     }
 
+    @Synchronized
     private fun updateRoute() {
-        val current = track ?: return
-        val route = runCatching { if (current.state == AudioTrack.STATE_INITIALIZED) current.routedDevice else null }.getOrNull()
-        if (route != null && route.id != activeId) {
-            val previous = activeId
-            // Routing can change before onAudioDevicesRemoved is delivered.
-            if (shouldPauseOnRouteChange(mutable.value.actual?.usb == true, previous, route.id)) onDisconnect?.invoke()
-            activeId = route.id
-            if (previous != null && previous != route.id) clearPreference()
-            mutable.update { it.copy(actual = report(route)) }
-            configure(mutable.value.track, current.format.channelMask)
+        val current = track
+        val route = runCatching {
+            if (current?.playState == AudioTrack.PLAYSTATE_PLAYING) current.routedDevice else null
+        }.getOrNull()
+        val output = mutable.value
+        val switching = SystemClock.elapsedRealtime() < switchUntil
+        val justSettled = switchUntil != 0L && !switching
+        if (justSettled) switchUntil = 0
+        val speaker = route?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE
+        val selectedSpeaker = speaker && output.connected.any { it.id == output.preferredId && it.speaker }
+        val status = routeSelectionStatus(output.preferredId, if (selectedSpeaker) output.preferredId else route?.id, switching)
+        val previous = lastRoute
+        val changed = route != null && previous?.id != route.id
+        val report = route?.let { if (changed) it.toReport() else previous }
+        if (changed && pauseAfterUsbRouteChange(
+                previous?.usb == true, previous?.id, route.id, device(previous?.id) != null, switching,
+            )) {
+            onDisconnect?.invoke()
+            mutable.update { it.copy(routeMessage = "USBの出力経路が外れたため一時停止しました") }
+        }
+        if (report != null) lastRoute = report
+        mutable.update { it.copy(actual = report, routeStatus = status) }
+        if (status == RouteSelectionStatus.MISMATCH && output.preferredId != null) {
+            if (output.mixerDeviceId != null) clearMixer()
+        } else if (route != null && current != null && (changed || justSettled || status != output.routeStatus)) {
+            if (output.mixerDeviceId != null && output.mixerDeviceId != route.id) clearMixer()
+            if (status != RouteSelectionStatus.SWITCHING) configure(output.track, current.format.channelMask)
         }
     }
 
-    private fun refreshDevices() { mutable.update { it.copy(connected = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { d -> d.isSink }.map(::report)) } }
-
-    @Synchronized fun clearPreference() {
-        if (Build.VERSION.SDK_INT >= 34) mixer?.clear()
-        appliedDevice = null
-        mutable.update { it.copy(mixerApplied = false, method = "Android標準音声再生", bitPerfect = "未確認") }
+    private fun anticipatedDevice(): AudioDeviceInfo? {
+        val output = mutable.value
+        if (output.routeStatus == RouteSelectionStatus.MISMATCH) return null
+        output.preferredId?.let { return device(it) }
+        output.actual?.id?.let { id -> device(id)?.let { return it } }
+        return if (Build.VERSION.SDK_INT >= 33) runCatching { audio.getAudioDevicesForAttributes(attributes).singleOrNull() }.getOrNull()
+        else device(lastRoute?.id)
     }
 
-    @Synchronized fun noteSource(value: PcmSpec?) { source = value }
-    @Synchronized fun newSource() { optimizationFailed = false; source = null; clearPreference() }
-    @Synchronized fun fallback(reason: String) { optimizationFailed = true; clearPreference(); mutable.update { it.copy(message = reason) } }
+    private fun devices(): List<AudioDeviceInfo> = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }
+    private fun device(id: Int?): AudioDeviceInfo? = id?.let { devices().firstOrNull { device -> device.id == it } }
+
+    @Synchronized
+    private fun mixerInvalidated(deviceId: Int) {
+        if (mutable.value.mixerDeviceId != deviceId) return
+        mutable.update {
+            it.copy(mixerDeviceId = null, method = STANDARD_PLAYBACK, bitPerfect = "設定変更・実出力未確認",
+                message = "ミキサー設定が解除または変更されました")
+        }
+    }
+
+    private fun clearMixer(preserveMessage: Boolean = false) {
+        if (Build.VERSION.SDK_INT >= 34) mixer?.clear()
+        mutable.update {
+            it.copy(mixerDeviceId = null, method = STANDARD_PLAYBACK, bitPerfect = "未確認",
+                message = it.message.takeIf { preserveMessage })
+        }
+    }
+
+    @Synchronized
+    fun noteSource(value: PcmSpec?) { source = value }
+
+    @Synchronized
+    fun newSource() {
+        optimizationFailed = false
+        source = null
+        clearMixer()
+    }
+
+    @Synchronized
+    fun fallback(reason: String) {
+        optimizationFailed = true
+        clearMixer()
+        mutable.update { it.copy(message = reason) }
+    }
+
+    private fun stopObservingTrack() {
+        track?.let { runCatching { it.removeOnRoutingChangedListener(routeListener) } }
+        track = null
+    }
+
+    @Synchronized
     fun close() {
+        if (!started) return
         started = false
         audio.unregisterAudioDeviceCallback(callback)
         handler.removeCallbacks(poll)
-        track?.let { runCatching { it.removeOnRoutingChangedListener(routeListener) } }
-        track = null
-        activeId = null
-        clearPreference()
+        stopObservingTrack()
+        lastRoute = null
+        switchUntil = 0
+        clearMixer()
         if (Build.VERSION.SDK_INT >= 34) mixer?.close()
         mixer = null
         onDisconnect = null
-        mutable.update { it.copy(actual = null, track = null) }
+        applyPreferred = null
+        mutable.update { it.copy(actual = null, track = null, routeStatus = routeSelectionStatus(it.preferredId, null, false)) }
     }
-}
-
-fun isUsb(device: AudioDeviceInfo) = device.type in setOf(AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_ACCESSORY)
-private fun report(d: AudioDeviceInfo) = DeviceReport(d.id, d.productName.toString(), when {
-    isUsb(d) -> "USB Audio"
-    d.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || d.type == AudioDeviceInfo.TYPE_BLE_HEADSET -> "Bluetooth"
-    d.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "内蔵スピーカー"
-    else -> "Android Audio"
-}, isUsb(d), d.sampleRates.toList(), d.channelCounts.toList(), d.encodings.toList())
-
-data class MixerResult(val applied: Boolean, val bitPerfect: String, val message: String?)
-
-@RequiresApi(34)
-private class MixerApi34(
-    private val audio: AudioManager, private val attributes: AudioAttributes, handler: Handler, onInvalidated: (Int) -> Unit,
-) {
-    private var device: AudioDeviceInfo? = null
-    private var selected: AudioMixerAttributes? = null
-    private val listener = AudioManager.OnPreferredMixerAttributesChangedListener { attrs, changedDevice, mixer ->
-        if (attrs.usage == attributes.usage && changedDevice.id == device?.id && mixer != selected) onInvalidated(changedDevice.id)
-    }
-    init { audio.addOnPreferredMixerAttributesChangedListener({ runnable -> handler.post(runnable) }, listener) }
-    fun apply(target: AudioDeviceInfo, spec: PcmSpec, mask: Int, engine: AudioOutputEngine, unchanged: Boolean): MixerResult {
-        return try {
-            val supported = audio.getSupportedMixerAttributes(target)
-            val candidates = supported.map { MixerOption(PcmSpec(it.format.sampleRate, it.format.channelCount, it.format.encoding), it.mixerBehavior == AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT) }
-            val support = if (candidates.any { it.bitPerfect }) "対応形式あり（動作未確認）" else "この接続で対応形式なし"
-            val choice = engine.select(spec, candidates, unchanged)
-            val attribute = choice?.let { chosen -> supported.firstOrNull { candidate ->
-                PcmSpec(candidate.format.sampleRate, candidate.format.channelCount, candidate.format.encoding) == chosen.spec &&
-                    (candidate.mixerBehavior == AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT) == chosen.bitPerfect &&
-                    candidate.format.channelMask == mask
-            } }
-            if (attribute == null) {
-                clear()
-                MixerResult(false, support, "一致するミキサー形式を適用できないため通常再生します")
-            } else if (selected == attribute && device?.id == target.id && audio.getPreferredMixerAttributes(attributes, target) == attribute) {
-                MixerResult(true, if (choice.bitPerfect) "API設定済み・実出力未確認" else support, null)
-            } else {
-                clear()
-                val accepted = audio.setPreferredMixerAttributes(attributes, target, attribute)
-                if (accepted && audio.getPreferredMixerAttributes(attributes, target) == attribute) {
-                    device = target; selected = attribute
-                    MixerResult(true, if (choice.bitPerfect) "API設定済み・実出力未確認" else support, null)
-                } else {
-                    audio.clearPreferredMixerAttributes(attributes, target)
-                    MixerResult(false, support, "ミキサー設定が受理されなかったため通常再生します")
-                }
-            }
-        } catch (e: RuntimeException) {
-            runCatching { audio.clearPreferredMixerAttributes(attributes, target) }
-            clear()
-            MixerResult(false, "未確認", "ミキサーAPIを利用できません: ${e.localizedMessage}。通常再生します")
-        }
-    }
-    fun clear() {
-        val old = device
-        device = null; selected = null
-        if (old != null) runCatching { audio.clearPreferredMixerAttributes(attributes, old) }
-    }
-    fun close() { clear(); audio.removeOnPreferredMixerAttributesChangedListener(listener) }
-}
-
-fun encodingName(encoding: Int): String = when (encoding) {
-    AudioFormat.ENCODING_PCM_8BIT -> "PCM 8 bit"
-    AudioFormat.ENCODING_PCM_16BIT -> "PCM 16 bit"
-    AudioFormat.ENCODING_PCM_24BIT_PACKED -> "PCM 24 bit"
-    AudioFormat.ENCODING_PCM_32BIT -> "PCM 32 bit"
-    AudioFormat.ENCODING_PCM_FLOAT -> "PCM float 32 bit"
-    else -> "encoding=$encoding"
 }

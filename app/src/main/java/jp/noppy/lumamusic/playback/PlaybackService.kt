@@ -65,12 +65,6 @@ class PlaybackService : MediaSessionService() {
                 setSmallIcon(R.drawable.ic_aurio_notification)
             },
         )
-        app.output.start {
-            disconnecting.set(true)
-            player.pause()
-            player.setPreferredAudioDevice(null)
-            save()
-        }
         val renderers = object : DefaultRenderersFactory(this) {
             override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink {
                 val provider = DefaultAudioSink.AudioTrackProvider { config, attributes, sessionId, trackContext ->
@@ -95,6 +89,14 @@ class PlaybackService : MediaSessionService() {
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
+        app.output.start(
+            onDisconnect = {
+                disconnecting.set(true)
+                player.pause()
+                save()
+            },
+            applyPreferred = player::setPreferredAudioDevice,
+        )
         shuffle = PlaybackShuffle(player)
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setAudioOffloadPreferences(
             TrackSelectionParameters.AudioOffloadPreferences.Builder().setAudioOffloadMode(

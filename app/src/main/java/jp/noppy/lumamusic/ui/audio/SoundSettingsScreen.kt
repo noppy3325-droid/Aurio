@@ -23,7 +23,7 @@ import jp.noppy.lumamusic.ui.LumaViewModel
 import kotlin.math.*
 
 @Composable
-fun SoundSettingsScreen(vm:LumaViewModel,onClose:()->Unit) {
+fun SoundSettingsScreen(vm: LumaViewModel, onOutput: () -> Unit, onClose: () -> Unit) {
     val app=LocalContext.current.applicationContext as LumaApp
     val saved by vm.settings.soundSettings.collectAsState(DspConfig())
     var config by remember { mutableStateOf(saved) }
@@ -48,7 +48,10 @@ fun SoundSettingsScreen(vm:LumaViewModel,onClose:()->Unit) {
         List(160){i->val f=20.0*(curveMaxFrequency/20).pow(i/159.0);engine.responseDb(f).coerceIn(-24.0,24.0).toFloat()}}
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(start=20.dp,end=20.dp,top=16.dp,bottom=140.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
         item{Row(verticalAlignment=Alignment.CenterVertically){IconButton(onClick=onClose){Icon(Icons.AutoMirrored.Filled.ArrowBack,"閉じる")};Text("サウンド",style=MaterialTheme.typography.headlineMedium)}}
-        item{Text("出力先: ${output.actual?.let{"${it.name} (${it.type})"}?:"実出力は未確認"}",style=MaterialTheme.typography.bodyMedium)}
+        item {
+            Text(output.actual?.name ?: "実際の出力先は未確認", style = MaterialTheme.typography.bodyMedium)
+            TextButton(onOutput) { Text("出力先を切り替え") }
+        }
         item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){FilterChip(selected=!active,onClick={save(config.copy(mode=SoundMode.DIRECT))},label={Text("Aurio Direct")});FilterChip(selected=active,onClick={save(config.copy(mode=SoundMode.ENHANCE))},label={Text("Aurio Enhance")})}
             Text(if(!active)"アプリ内音声補正 OFF。Android・機器内部の無加工やビットパーフェクトを保証する名称ではありません。"else "デコード済みPCMを処理します。安全なヘッドルームにより音量が下がる場合があります。",style=MaterialTheme.typography.bodySmall)}
         item{SoundCard("音質の状態"){
