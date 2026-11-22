@@ -79,7 +79,7 @@ internal class ArtworkAmbient(
     val palette: ArtworkAmbientPalette,
     val diffusion: Bitmap?,
     val sourceSize: Size = Size.Zero,
-    val headerLight: Float = 0f,
+    val headerSamples: List<Color> = emptyList(),
 ) {
     companion object {
         val Default = ArtworkAmbient(ArtworkAmbientPalette.Default, null)
@@ -153,7 +153,7 @@ private suspend fun loadArtworkAmbient(context: Context, loader: ImageLoader, ar
     }
     val palette = ArtworkAmbientPalette.fromPixels(pixels, width, height, dominant)
     val accent = palette.accent
-    val headerLight = artworkHeaderLuminance(pixels, width, height)
+    val headerSamples = artworkHeaderSamples(pixels, width, height)
     // The texture preserves the coordinates of the source, so the color below
     // a feathered edge continues from the art at that exact point.
     val columns = 32
@@ -175,24 +175,24 @@ private suspend fun loadArtworkAmbient(context: Context, loader: ImageLoader, ar
     }
     val diffusion = Bitmap.createBitmap(softPixels, columns, rows, Bitmap.Config.ARGB_8888)
     val sourceSize = Size(width.toFloat(), height.toFloat())
-    return ArtworkAmbient(palette, diffusion, sourceSize, headerLight).also { artworkAmbientCache.put(artwork, it) }
+    return ArtworkAmbient(palette, diffusion, sourceSize, headerSamples).also { artworkAmbientCache.put(artwork, it) }
 }
 
 // Local highlights can sit directly behind the white clock or menu. Ignore
 // isolated bright pixels, but keep the near-white values in each header tile.
-private fun artworkHeaderLuminance(pixels: IntArray, width: Int, height: Int): Float =
-    (0 until 12).maxOf { tile ->
+private fun artworkHeaderSamples(pixels: IntArray, width: Int, height: Int): List<Color> =
+    (0 until 12).mapNotNull { tile ->
         val column = tile % 6
         val row = tile / 6
-        val luminances = buildList {
+        val colors = buildList {
             for (y in height * row / 8 until (height * (row + 1) / 8).coerceAtLeast(1)) {
                 for (x in width * column / 6 until width * (column + 1) / 6) {
                     val argb = pixels[y * width + x]
-                    if (argb ushr 24 >= 192) add(Color(argb).luminance())
+                    if (argb ushr 24 >= 192) add(Color(argb).copy(alpha = 1f))
                 }
             }
-        }.sorted()
-        luminances.getOrElse(luminances.size * 9 / 10) { 0f }
+        }.sortedBy(Color::luminance)
+        colors.getOrNull(colors.size * 9 / 10)
     }
 
 private fun playerArtworkBounds(width: Float, height: Float, controlsTop: Float, overlap: Float, wide: Boolean): Rect =
@@ -294,7 +294,7 @@ private fun PlayerArtworkSceneLayer(
     val lowerEdge = lerp(palette.bottomLeft, palette.bottomRight, .5f)
     val top = playerAmbientTone(upperEdge, accent)
     val bottom = playerAmbientTone(lowerEdge, accent)
-    val headerShadeAlpha = .16f + .49f * ((scene.ambient.headerLight - .04f) / .47f).coerceIn(0f, 1f)
+    val statusShade = remember(scene.ambient, top) { playerHeaderShade(scene.ambient.headerSamples, top) }
     val heroAlpha = if (alternatePanel) .06f else 1f
     val overlap = 96.dp
     fun controlsTop(height: Float, bottomInset: Int): Float {
@@ -362,11 +362,11 @@ private fun PlayerArtworkSceneLayer(
                     titleLine to Color.Black.copy(alpha = .32f),
                     1f to Color.Black.copy(alpha = .32f),
                 )
-                val statusAndHeader = safeDrawing.getTop(this) + (if (wide) 8.dp else 38.dp).toPx()
+                val statusBottom = safeDrawing.getTop(this) + 12.dp.toPx()
                 val headerShade = Brush.verticalGradient(
-                    colors = listOf(Color.Black.copy(alpha = headerShadeAlpha), Color.Transparent),
-                    startY = statusAndHeader,
-                    endY = statusAndHeader + 60.dp.toPx(),
+                    colors = listOf(statusShade, statusShade.copy(alpha = 0f)),
+                    startY = statusBottom,
+                    endY = statusBottom + 44.dp.toPx(),
                 )
                 val miniFill = Brush.linearGradient(listOf(top, bottom))
                 onDrawWithContent {
@@ -377,7 +377,7 @@ private fun PlayerArtworkSceneLayer(
                     val feather = ((progress - .08f) / .92f).coerceIn(0f, 1f)
                     if (feather > 0f) {
                         if (scene.hero != null) {
-                            drawRect(headerShade, alpha = feather * heroAlpha)
+                            if (statusShade.alpha > 0f) drawRect(headerShade, alpha = feather * heroAlpha)
                             if (!wide) drawRect(titleShade, alpha = feather * heroAlpha)
                         }
                         drawRect(mask, alpha = feather, blendMode = BlendMode.DstOut)

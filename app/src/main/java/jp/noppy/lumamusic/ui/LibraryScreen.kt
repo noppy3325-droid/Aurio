@@ -14,6 +14,9 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -332,9 +335,9 @@ internal fun LibraryScreen(
                             if (playlistId == null && category != LibraryCategory.Albums) {
                                 Box {
                                     IconButton({ showSort = true }) {
-                                        Icon(Icons.Rounded.Sort, "曲の並べ替え", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Icon(Icons.AutoMirrored.Rounded.Sort, "曲の並べ替え", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
-                                    DropdownMenu(showSort, { showSort = false }) {
+                                    AurioMenu(showSort, { showSort = false }) {
                                         TrackSort.entries.forEach { option ->
                                             DropdownMenuItem(
                                                 text = { Text(option.label) },
@@ -342,7 +345,7 @@ internal fun LibraryScreen(
                                                     sort = option
                                                     showSort = false
                                                 },
-                                                leadingIcon = if (sort == option) ({ Icon(Icons.Rounded.Check, "選択中") }) else null,
+                                                trailingIcon = if (sort == option) ({ Icon(Icons.Rounded.Check, "選択中", Modifier.size(20.dp)) }) else null,
                                             )
                                         }
                                     }
@@ -525,23 +528,27 @@ internal fun TrackRow(
         if (favorite) Icon(Icons.Rounded.Favorite, "お気に入り", tint = Rose, modifier = Modifier.size(14.dp))
         Box {
             IconButton({ menu = true }) { Icon(Icons.Rounded.MoreHoriz, "曲の操作") }
-            DropdownMenu(menu, { menu = false }) {
-                DropdownMenuItem({ Text(if (favorite) "お気に入りを解除" else "お気に入りに登録") }, {
-                    onFavorite()
-                    menu = false
-                })
-                DropdownMenuItem({ Text("次に再生") }, {
-                    vm.enqueue(track, true)
-                    menu = false
-                })
-                DropdownMenuItem({ Text("キューの最後に追加") }, {
-                    vm.enqueue(track, false)
-                    menu = false
-                })
-                DropdownMenuItem({ Text("プレイリストに追加") }, {
-                    addTo = true
-                    menu = false
-                })
+            AurioMenu(menu, { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text(if (favorite) "お気に入りを解除" else "お気に入りに登録") },
+                    leadingIcon = { Icon(if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, null, Modifier.size(20.dp)) },
+                    onClick = { menu = false; onFavorite() },
+                )
+                DropdownMenuItem(
+                    text = { Text("次に再生") },
+                    leadingIcon = { Icon(Icons.Rounded.SkipNext, null, Modifier.size(20.dp)) },
+                    onClick = { menu = false; vm.enqueue(track, true) },
+                )
+                DropdownMenuItem(
+                    text = { Text("キューの最後に追加") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Rounded.QueueMusic, null, Modifier.size(20.dp)) },
+                    onClick = { menu = false; vm.enqueue(track, false) },
+                )
+                DropdownMenuItem(
+                    text = { Text("プレイリストに追加") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, null, Modifier.size(20.dp)) },
+                    onClick = { menu = false; addTo = true },
+                )
             }
         }
     }

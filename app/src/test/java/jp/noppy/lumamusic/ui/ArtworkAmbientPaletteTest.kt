@@ -68,4 +68,16 @@ class ArtworkAmbientPaletteTest {
             assertTrue((label.luminance() + .05f) / (background.luminance() + .05f) >= 4.5f)
         }
     }
+
+    @Test fun `header keeps dark artwork unshaded and limits highlights for status icons`() {
+        val tint = Color(0xFFD34664)
+        val dark = Color(0xFF17274D)
+        assertEquals(0f, playerHeaderShade(listOf(dark), tint).alpha, .001f)
+
+        val samples = listOf(Color.White, Color(0xFFEAC464), Color(0xFF61A1E8))
+        val shade = playerHeaderShade(samples, tint)
+        assertTrue(shade.red > shade.green)
+        assertTrue(samples.all { shade.compositeOver(it).luminance() <= .175f })
+        assertTrue(shade.compositeOver(Color.White).luminance() >= .15f)
+    }
 }

@@ -512,6 +512,14 @@ class UiSmokeTest {
                     it.text?.toString() == label || it.contentDescription?.toString() == label
                 }.map { android.graphics.Rect().also(it::getBoundsInScreen) }.maxByOrNull { it.centerY() }
                 val artLabel = "アルバムアート: ${top.title}"
+                fun assertDockProgressInset() {
+                    eventually("playback progress sits inside the rounded chrome") {
+                        val rail = dockBounds("再生の進み具合") ?: return@eventually false
+                        val artwork = dockBounds(artLabel) ?: return@eventually false
+                        rail.top > artwork.centerY() &&
+                            rail.right <= density.widthPixels - (30 * density.density).toInt()
+                    }
+                }
                 fun dockIsOneRow(): Boolean {
                     val tab = dockBounds("ライブラリ") ?: return false
                     val art = dockBounds(artLabel) ?: return false
@@ -519,6 +527,7 @@ class UiSmokeTest {
                 }
                 swipe(activity, .73f, .69f, .73f, .41f)
                 eventually("vertical scrolling docks the mini-player beside the tabs") { dockIsOneRow() }
+                assertDockProgressInset()
                 screenshot("v054-compact-dock")
                 val art = checkNotNull(dockBounds(artLabel))
                 val x = art.centerX().toFloat() / activity.window.decorView.width
@@ -533,6 +542,7 @@ class UiSmokeTest {
                     val expandedArt = dockBounds(artLabel)
                     tab != null && expandedArt != null && tab.centerY() - expandedArt.centerY() > 35 * density.density
                 }
+                assertDockProgressInset()
             }
             val lastTrack = tracks.first()
             val lastRowIndex = app.library.tracks.first().size // Track count header occupies item zero.
@@ -685,6 +695,13 @@ class UiSmokeTest {
                 main { assertEquals(mode, player.repeatMode) }
             }
             screenshot("04-player-light")
+            click("再生メニュー")
+            eventually("anchored player menu shows the standby action") { textPresent("横置きスタンバイ") }
+            screenshot("v111-player-menu")
+            assertTrue(instrumentation.uiAutomation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK))
+            eventually("back dismisses the menu without closing the player") {
+                !textPresent("横置きスタンバイ") && textPresent("プレイヤーを閉じる")
+            }
             click("キュー")
             eventually("queue sheet") { textPresent("次はこちら") }
             screenshot("05-queue-glass")

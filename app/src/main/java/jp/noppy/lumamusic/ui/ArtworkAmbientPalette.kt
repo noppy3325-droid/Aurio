@@ -1,6 +1,7 @@
 package jp.noppy.lumamusic.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import kotlin.math.pow
@@ -100,4 +101,21 @@ internal fun playerAmbientTone(sample: Color, accent: Color): Color {
         if (darken(middle).luminance() <= maxLuminance) darker = middle else lighter = middle
     }
     return darken(darker)
+}
+
+/** Find the least tint needed to keep the white status icons legible. */
+internal fun playerHeaderShade(samples: List<Color>, tint: Color): Color {
+    val lightLimit = .17f
+    if (samples.none { it.luminance() > lightLimit }) return Color.Transparent
+
+    val shade = Color(tint.red * .38f, tint.green * .38f, tint.blue * .38f)
+    var lower = 0f
+    var upper = 1f
+    repeat(9) {
+        val alpha = (lower + upper) / 2f
+        val candidate = shade.copy(alpha = alpha)
+        if (samples.any { candidate.compositeOver(it).luminance() > lightLimit }) lower = alpha
+        else upper = alpha
+    }
+    return shade.copy(alpha = upper)
 }

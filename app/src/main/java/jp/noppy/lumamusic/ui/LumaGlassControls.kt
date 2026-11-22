@@ -5,7 +5,9 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateTo
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.progressSemantics
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
@@ -25,7 +27,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -42,11 +47,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.lifecycle.Lifecycle
@@ -89,8 +96,10 @@ import kotlin.math.sin
     val lift by animateFloatAsState(if (pressed && !reduced) .65f else 0f, label = "mini player lens lift")
     Box(modifier.fillMaxWidth()) {
         DockChrome(Modifier.matchParentSize(), LumaDock.NavigationRadius, surfaceOpacity) { lift }
-        Column(Modifier.fillMaxSize().padding(horizontal = lerp(10.dp, 4.dp, compact))) {
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = lerp(10.dp, 4.dp, compact)),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Box(
                 Modifier.weight(1f).fillMaxHeight().clipToBounds().then(trackGesture)
                     .clickable(interactionSource = interaction, indication = LocalIndication.current, role = Role.Button, onClickLabel = "プレイヤーを開く", onClick = open)
@@ -107,7 +116,25 @@ import kotlin.math.sin
                 IconButton({ next() }, enabled = playback.nextItem != null) { Icon(Icons.Rounded.SkipNext, "次の曲", Modifier.size(27.dp)) }
             }
         }
-        if (playback.duration > 0) LinearProgressIndicator(progress = { (playback.position.toFloat() / playback.duration).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(1.dp), color = LocalContentColor.current.copy(.5f), trackColor = Color.Transparent, drawStopIndicator = {})
+        if (playback.duration > 0) {
+            val fraction = (playback.position.toFloat() / playback.duration).coerceIn(0f, 1f)
+            val ink = LocalContentColor.current
+            // This straight chord stays inside the dock's 32 dp corners at both widths.
+            Canvas(
+                Modifier.align(Alignment.BottomCenter)
+                    .padding(start = 18.dp, end = 18.dp, bottom = 6.dp)
+                    .fillMaxWidth().height(2.dp)
+                    .progressSemantics(fraction)
+                    .semantics { contentDescription = "再生の進み具合" },
+            ) {
+                val corner = CornerRadius(size.height / 2f)
+                drawRoundRect(ink.copy(alpha = .16f), cornerRadius = corner)
+                val filled = size.width * fraction
+                if (filled > 0f) {
+                    val start = if (layoutDirection == LayoutDirection.Ltr) 0f else size.width - filled
+                    drawRoundRect(ink.copy(alpha = .62f), Offset(start, 0f), Size(filled, size.height), corner)
+                }
+            }
         }
     }
 }

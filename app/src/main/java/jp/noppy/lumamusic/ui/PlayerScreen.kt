@@ -4,21 +4,26 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -52,10 +57,13 @@ internal fun PlayerScreen(
     val outputState by vm.output.collectAsStateWithLifecycle()
     var menu by rememberSaveable { mutableStateOf(false) }
     val detailsHeight = remember { mutableIntStateOf(0) }
-    val playerColors = remember {
+    val palette = artworkScene?.ambient?.palette ?: ArtworkAmbientPalette.Default
+    val playerColors = remember(palette) {
+        val tint = playerAmbientTone(palette.dominant, palette.accent)
         darkColorScheme(
             background = Color(0xFF161319),
-            surface = Color(0xFF201C23),
+            surface = lerp(Color(0xFF201C23), tint, .32f),
+            surfaceVariant = lerp(Color(0xFF28242D), tint, .38f),
             onBackground = Color.White,
             onSurface = Color.White,
             onSurfaceVariant = Color(0xFFFAF4F8),
@@ -91,16 +99,24 @@ internal fun PlayerScreen(
                         }
                         val header: @Composable (Modifier) -> Unit = { modifier ->
                             Row(modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(close) { Icon(Icons.Rounded.KeyboardArrowDown, "プレイヤーを閉じる", Modifier.size(30.dp)) }
+                                PlayerGlassButton(Icons.Rounded.KeyboardArrowDown, "プレイヤーを閉じる", close, iconSize = 27.dp)
                                 Box(
                                     Modifier.weight(1f).fillMaxHeight().playerSheetDrag(sheet, opening = false).padding(start = 8.dp),
                                     contentAlignment = Alignment.CenterStart
                                 ) {
-                                    if (album.isNotEmpty()) TrackText(album, style = MaterialTheme.typography.labelMedium, color = Color.White.copy(.96f))
+                                    if (album.isNotEmpty()) {
+                                        TrackText(
+                                            album,
+                                            Modifier.background(playerColors.surface.copy(alpha = .80f), CircleShape)
+                                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = Color.White,
+                                        )
+                                    }
                                 }
                                 Box {
-                                    IconButton({ menu = true }) { Icon(Icons.Rounded.MoreHoriz, "再生メニュー") }
-                                    DropdownMenu(menu, { menu = false }) {
+                                    PlayerGlassButton(Icons.Rounded.MoreHoriz, "再生メニュー", { menu = true }, active = menu)
+                                    AurioMenu(menu, { menu = false }) {
                                         DropdownMenuItem(
                                             text = { Text("横置きスタンバイ") },
                                             leadingIcon = { Icon(Icons.Rounded.ScreenRotation, null) },
@@ -120,9 +136,14 @@ internal fun PlayerScreen(
                                         TrackText(artist, style = artistStyle, color = playerColors.onSurfaceVariant)
                                     }
                                 }
-                                IconButton({ track?.let { vm.favorite(it.uri) } }, enabled = track != null) {
-                                    Icon(if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, if (favorite) "お気に入りを解除" else "お気に入りに登録", tint = if (favorite) playerColors.primary else Color.White)
-                                }
+                                PlayerGlassButton(
+                                    if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                    if (favorite) "お気に入りを解除" else "お気に入りに登録",
+                                    { track?.let { vm.favorite(it.uri) } },
+                                    enabled = track != null,
+                                    active = favorite,
+                                    tint = if (favorite) playerColors.primary else Color.White,
+                                )
                             }
                             SeekControls(vm, playback, compact = true, artworkBackdrop = true)
                             PlaybackButtons(vm, playback, compact = compact)
@@ -130,7 +151,7 @@ internal fun PlayerScreen(
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                                 PlayerTool("歌詞", Icons.Rounded.Lyrics, panel == "lyrics", compact) { setPanel(if (panel == "lyrics") "player" else "lyrics") }
                                 PlayerTool("出力", Icons.Rounded.SpeakerGroup, false, compact, output)
-                                PlayerTool("キュー", Icons.Rounded.QueueMusic, panel == "queue", compact) { setPanel(if (panel == "queue") "player" else "queue") }
+                                PlayerTool("キュー", Icons.AutoMirrored.Rounded.QueueMusic, panel == "queue", compact) { setPanel(if (panel == "queue") "player" else "queue") }
                                 PlayerTool("サウンド", Icons.Rounded.Equalizer, false, compact, sound)
                             }
                             Spacer(Modifier.height(if (compact) 8.dp else 16.dp))
@@ -171,9 +192,39 @@ internal fun PlayerScreen(
     }
 }
 
+@Composable
+private fun PlayerGlassButton(
+    icon: ImageVector,
+    label: String,
+    action: () -> Unit,
+    enabled: Boolean = true,
+    active: Boolean = false,
+    tint: Color = Color.White,
+    iconSize: Dp = 22.dp,
+) {
+    IconButton(action, modifier = Modifier.size(48.dp), enabled = enabled) {
+        Box(
+            Modifier.size(36.dp).liquidSurface(radius = 18)
+                .background(Color.Black.copy(alpha = if (active) .30f else .20f), CircleShape)
+                .border(1.dp, Color.White.copy(alpha = if (active) .38f else .23f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, label, Modifier.size(iconSize), tint = if (enabled) tint else tint.copy(alpha = .38f))
+        }
+    }
+}
+
 @Composable private fun RowScope.PlayerTool(label: String, icon: ImageVector, selected: Boolean, compact: Boolean, action: () -> Unit) {
-    Column(Modifier.weight(1f).heightIn(min = 48.dp).clickable(onClick = action).padding(horizontal = 4.dp, vertical = if (compact) 0.dp else 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Icon(icon, null, Modifier.size(21.dp), tint = if (selected) MaterialTheme.colorScheme.primary else LocalContentColor.current.copy(.92f))
+    Column(Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(18.dp))
+        .clickable(onClick = action).padding(horizontal = 4.dp, vertical = if (compact) 0.dp else 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Box(
+            Modifier.size(width = 40.dp, height = 27.dp)
+                .background(if (selected) Color.White.copy(alpha = .16f) else Color.Transparent, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, null, Modifier.size(21.dp), tint = if (selected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = .92f))
+        }
         Spacer(Modifier.height(if (compact) 2.dp else 4.dp))
         val caption = MaterialTheme.typography.labelSmall
         TrackText(
