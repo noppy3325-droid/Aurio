@@ -37,6 +37,7 @@ import jp.noppy.lumamusic.data.*
         }
         SettingsGroup { Text("デザイン", style = MaterialTheme.typography.titleLarge)
             Row(Modifier.horizontalScroll(rememberScrollState())) { listOf("system" to "自動", "dark" to "ダーク", "light" to "ライト").forEach { (key, label) -> FilterChip(prefs.theme == key, { vm.action { vm.settings.text("theme", key) } }, label = { Text(label) }, border = null, shape = LumaShapes.Pill, modifier = Modifier.padding(end = 6.dp)) } }
+            LauncherIconPicker()
             Text("ガラスの描画品質", style = MaterialTheme.typography.titleMedium)
             Row(Modifier.horizontalScroll(rememberScrollState())) { GlassQuality.entries.forEach { quality -> FilterChip(prefs.glassQuality == quality.name, { vm.action { vm.settings.text("glassQuality", quality.name) } }, label = { Text(quality.label) }, border = null, shape = LumaShapes.Pill, modifier = Modifier.padding(end = 6.dp)) } }
             Text("高品質では背景の屈折を強めます。軽量では屈折を省き、オフでは通常パネルを表示します。省電力中やアニメーション軽減時は描画の負荷を抑えます。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

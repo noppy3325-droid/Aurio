@@ -1,6 +1,7 @@
 package jp.noppy.lumamusic
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.LauncherApps
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -23,8 +24,9 @@ class BrandAssetsTest {
     @Test fun installedLauncherEntrySuppliesAdaptiveIcon() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val launcher = context.getSystemService(LauncherApps::class.java)
-        val entry = launcher.getActivityList(context.packageName, Process.myUserHandle())
-            .single { it.componentName.className == MainActivity::class.java.name }
+        val selected = LauncherIcon.selected(context)
+        val entry = launcher.getActivityList(context.packageName, Process.myUserHandle()).single()
+        assertEquals(selected.component(context), entry.componentName)
         assertEquals("Aurio", entry.label.toString())
 
         // HyperOS can return a flattened, themed bitmap to launcher clients.
@@ -40,6 +42,29 @@ class BrandAssetsTest {
             val themed = checkNotNull(icon.monochrome).mutate()
             themed.setTint(Color.rgb(225, 202, 232))
             writeBrandArtwork(context, "launcher-monochrome.png", themed, size = 192)
+        }
+    }
+
+    @Test fun iconSelectionKeepsOneLaunchableEntryAndUsesItsArtwork() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val launcher = context.getSystemService(LauncherApps::class.java)
+        val original = LauncherIcon.selected(context)
+        try {
+            val resources = mutableSetOf<Int>()
+            LauncherIcon.entries.forEach { icon ->
+                icon.apply(context)
+                assertEquals(icon, LauncherIcon.selected(context))
+                val entry = launcher.getActivityList(context.packageName, Process.myUserHandle()).single()
+                assertEquals(icon.component(context), entry.componentName)
+                assertEquals("Aurio", entry.label.toString())
+                val info = context.packageManager.getActivityInfo(entry.componentName, 0)
+                assertEquals(LauncherEntryActivity::class.java.name, info.targetActivity)
+                assertTrue("Launcher resources must differ between colors", resources.add(info.iconResource))
+                assertTrue(Intent(context, AurioActivity::class.java).resolveActivity(context.packageManager) != null)
+                writeBrandArtwork(context, "launcher-${icon.name.lowercase()}.png", entry.getIcon(0), size = 192)
+            }
+        } finally {
+            original.apply(context)
         }
     }
 }

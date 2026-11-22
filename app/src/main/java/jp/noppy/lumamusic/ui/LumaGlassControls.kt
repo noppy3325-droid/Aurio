@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
@@ -38,6 +39,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -47,6 +49,9 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.kyant.backdrop.shadow.Shadow
 import jp.noppy.lumamusic.playback.PlaybackUi
 import kotlinx.coroutines.CancellationException
@@ -54,11 +59,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.round
 import kotlin.math.roundToInt
-import kotlin.math.sign
 import kotlin.math.sin
 
 @Composable fun FloatingGlass(modifier: Modifier = Modifier, radius: Int = 28, padding: PaddingValues = PaddingValues(12.dp), content: @Composable ColumnScope.() -> Unit) {
@@ -126,63 +131,84 @@ internal fun DockChrome(modifier: Modifier, radius: Int, opacity: Float, lift: (
     }
 }
 
-private data class LensHandoff(val fromPage: Int, val toPage: Int, val releaseX: Float)
+private enum class LensPhase { Idle, PickedUp, Dragging, Settling }
 
 /** Ephemeral touch geometry. The pager remains the owner of the selected tab. */
-private class NavigationLensMotion(private val scope: CoroutineScope) {
+private class NavigationLensMotion(private val scope: CoroutineScope, tabCount: Int) {
     val bounds = mutableStateMapOf<Int, Rect>()
-    private var visualCenter by mutableStateOf<Float?>(null)
-    private var handoff by mutableStateOf<LensHandoff?>(null)
-    private var settling: Job? = null
-    var speedStretch by mutableFloatStateOf(0f)
-    var pressed by mutableStateOf(false)
-    val lifted by derivedStateOf { pressed || visualCenter != null && handoff == null }
-    val canStart: Boolean get() = settling?.isActive != true
+    val anchors by derivedStateOf {
+        val ordered = (0 until tabCount).map { bounds[it]?.center?.x ?: return@derivedStateOf null }
+        LensAnchors(ordered)
+    }
+    private var previewTabPosition by mutableStateOf<Float?>(null)
+    private var springJob: Job? = null
+    private var generation = 0
+    var phase by mutableStateOf(LensPhase.Idle)
+        private set
+    var deformation by mutableFloatStateOf(0f)
+        private set
+    val held: Boolean get() = phase == LensPhase.PickedUp || phase == LensPhase.Dragging
 
-    fun move(center: Float) { visualCenter = center }
+    fun position(pagerPosition: Float): Float = previewTabPosition ?: pagerPosition
+
+    fun pickUp(position: Float): Int {
+        val token = interruptSpring()
+        previewTabPosition = position
+        phase = LensPhase.PickedUp
+        return token
+    }
+
+    fun isHolding(token: Int): Boolean = generation == token && held
+
+    fun drag(position: Float, stretch: Float) {
+        previewTabPosition = position
+        deformation = stretch
+        phase = LensPhase.Dragging
+    }
 
     fun reset() {
-        settling?.cancel()
-        handoff = null
-        visualCenter = null
-        speedStretch = 0f
-        pressed = false
+        interruptSpring()
+        finish()
     }
 
-    fun release(pager: PagerState, origin: Int, target: Int, originX: Float, reduced: Boolean, select: (Int) -> Unit) {
-        val releaseX = visualCenter ?: originX
-        settling = scope.launch {
+    private fun interruptSpring(): Int {
+        generation++
+        springJob?.cancel()
+        return generation
+    }
+
+    private fun finish() {
+        previewTabPosition = null
+        phase = LensPhase.Idle
+        deformation = 0f
+    }
+
+    fun settle(pager: PagerState, target: Int, initialVelocity: Float, reduced: Boolean, select: ((Int) -> Unit)?) {
+        val start = position(pager.indicatorPage(reduced))
+        val token = interruptSpring()
+        previewTabPosition = if (reduced) target.toFloat() else start
+        phase = LensPhase.Settling
+        select?.invoke(target)
+        springJob = scope.launch {
             try {
-                if (target != origin) {
-                    handoff = LensHandoff(origin, target, releaseX)
-                    select(target)
-                    kotlinx.coroutines.withTimeoutOrNull(1_500L) {
-                        snapshotFlow { pager.settledPage }.first { it == target }
+                if (!reduced) {
+                    AnimationState(start, initialVelocity = initialVelocity.coerceIn(-8f, 8f)).animateTo(
+                        target.toFloat(),
+                        spring(dampingRatio = .94f, stiffness = Spring.StiffnessMedium, visibilityThreshold = .004f),
+                    ) {
+                        previewTabPosition = value
+                        deformation = (abs(velocity) * .0035f).coerceAtMost(.036f)
                     }
-                } else if (!reduced) {
-                    AnimationState(releaseX).animateTo(
-                        originX,
-                        spring(dampingRatio = .94f, stiffness = Spring.StiffnessMedium, visibilityThreshold = .5f),
-                    ) { visualCenter = value }
+                }
+                // Keep the lens on its destination while a committed Pager move
+                // settles, including when a new touch is cancelled mid-animation.
+                withTimeoutOrNull(1_800L) {
+                    snapshotFlow { pager.settledPage == target && !pager.isScrollInProgress }.first { it }
                 }
             } finally {
-                handoff = null
-                visualCenter = null
+                if (generation == token) finish()
             }
         }
-    }
-
-    fun center(page: Float, fallback: Float): Float {
-        val transition = handoff ?: return visualCenter ?: fallback
-        val destination = bounds[transition.toPage]?.center?.x ?: return fallback
-        val progress = ((page - transition.fromPage) / (transition.toPage - transition.fromPage)).coerceIn(0f, 1f)
-        return transition.releaseX + (destination - transition.releaseX) * progress
-    }
-
-    fun stretch(page: Float, center: Float, width: Float): Float {
-        if (visualCenter == null) return 1f + .07f * sin(abs(page - round(page)) * PI).toFloat()
-        val offset = bounds.values.minOf { abs(center - it.center.x) } / width
-        return 1f + .065f * offset.coerceIn(0f, .5f) * 2f + speedStretch
     }
 }
 
@@ -193,20 +219,37 @@ private class NavigationLensMotion(private val scope: CoroutineScope) {
     modifier: Modifier = Modifier,
     compact: Float = 0f,
     surfaceOpacity: Float = 1f,
+    onLensOwnershipChanged: (Boolean) -> Unit = {},
 ) {
     val reduced = LocalReducedMotion.current
     val scope = rememberCoroutineScope()
     val select by rememberUpdatedState(onSelect)
-    val motion = remember(scope) { NavigationLensMotion(scope) }
+    val changeOwnership by rememberUpdatedState(onLensOwnershipChanged)
+    val haptics = LocalHapticFeedback.current
+    val motion = remember(scope) { NavigationLensMotion(scope, LumaTabs.size) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var resumed by remember(lifecycle) { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
+    DisposableEffect(lifecycle, motion) {
+        val observer = LifecycleEventObserver { _, _ ->
+            resumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            if (!resumed) motion.reset()
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            changeOwnership(false)
+        }
+    }
     val tabInteractions = remember { List(LumaTabs.size) { MutableInteractionSource() } }
     val tabPresses = tabInteractions.map { it.collectIsPressedAsState() }
     var measuredSize by remember { mutableStateOf(IntSize.Zero) }
-    LaunchedEffect(measuredSize, swipeEnabled, reduced) { motion.reset() }
+    LaunchedEffect(swipeEnabled, reduced) { motion.reset() }
     val lift by animateFloatAsState(
-        if ((tabPresses.any { it.value } || motion.lifted || pager.isScrollInProgress) && !reduced) 1f else 0f,
+        if ((tabPresses.any { it.value } || motion.held || pager.isScrollInProgress) && !reduced) 1f else 0f,
         spring(dampingRatio = .8f, stiffness = Spring.StiffnessMediumLow * 2f),
         label = "navigation lens lift",
     )
+    val materialLift = { if (!reduced && motion.held) lift.coerceAtLeast(.18f) else lift }
 
     Box(
         modifier.widthIn(max = 416.dp).fillMaxWidth(),
@@ -215,11 +258,15 @@ private class NavigationLensMotion(private val scope: CoroutineScope) {
         DockChrome(Modifier.matchParentSize(), LumaDock.NavigationRadius, surfaceOpacity)
         Box(
             Modifier.padding(4.dp).fillMaxWidth().onSizeChanged { measuredSize = it }
-                .dragNavigationLens(pager, motion, swipeEnabled, reduced, measuredSize) { select(it) },
+                .dragNavigationLens(pager, motion, swipeEnabled && resumed, reduced, measuredSize,
+                    changeOwnership = { changeOwnership(it) },
+                    tick = { haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick) },
+                    select = { select(it) },
+                ),
         ) {
             Box(
-                Modifier.matchParentSize().positionNavigationLens(pager, motion, reduced, compact) { lift }
-                    .liquidSurface(selectionLens = true, highlight = LumaDock.GlassHighlight, shadow = NavigationShadow, lensLift = { lift }),
+                Modifier.matchParentSize().positionNavigationLens(pager, motion, reduced, compact, materialLift)
+                    .liquidSurface(selectionLens = true, highlight = LumaDock.GlassHighlight, shadow = NavigationShadow, lensLift = materialLift),
             )
             Row(Modifier.fillMaxWidth().selectableGroup()) {
                 LumaTabs.forEachIndexed { index, tab ->
@@ -227,9 +274,10 @@ private class NavigationLensMotion(private val scope: CoroutineScope) {
                         val topLeft = it.positionInParent()
                         motion.bounds[index] = Rect(topLeft.x, topLeft.y, topLeft.x + it.size.width, topLeft.y + it.size.height)
                     }
-                    NavigationTab(tab, pager, index, reduced, compact, tabInteractions[index], {
-                        motion.reset()
-                        select(index)
+                    NavigationTab(tab, pager.settledPage == index, index, compact, tabInteractions[index], {
+                        motion.settle(pager, index, 0f, reduced) { select(it) }
+                    }, {
+                        motion.position(pager.indicatorPage(reduced))
                     }, anchor)
                 }
             }
@@ -243,84 +291,84 @@ private fun Modifier.dragNavigationLens(
     enabled: Boolean,
     reduced: Boolean,
     size: IntSize,
+    changeOwnership: (Boolean) -> Unit,
+    tick: () -> Unit,
     select: (Int) -> Unit,
 ) = pointerInput(pager, motion, enabled, reduced, size) {
     if (!enabled) return@pointerInput
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
-        val origin = pager.settledPage
-        val start = motion.bounds[origin] ?: return@awaitEachGesture
-        if (!start.contains(down.position) || pager.isScrollInProgress || !motion.canStart) return@awaitEachGesture
-
-        val lastIndex = pager.pageCount - 1
-        val first = motion.bounds[0]?.center?.x ?: return@awaitEachGesture
-        val last = motion.bounds[lastIndex]?.center?.x ?: return@awaitEachGesture
-        val direction = (last - first).sign
+        if (pager.isScrollInProgress && motion.phase != LensPhase.Settling) return@awaitEachGesture
+        val anchors = motion.anchors ?: return@awaitEachGesture
+        val startPosition = motion.position(pager.indicatorPage(reduced)).coerceIn(0f, (pager.pageCount - 1).toFloat())
+        val start = motion.bounds[startPosition.roundToInt()] ?: return@awaitEachGesture
+        val startX = anchors.xAt(startPosition)
+        if (down.position.y !in start.top..start.bottom || abs(down.position.x - startX) > start.width / 2f) {
+            return@awaitEachGesture
+        }
+        val token = motion.pickUp(startPosition)
+        changeOwnership(true)
         val velocity = VelocityTracker()
         velocity.addPosition(down.uptimeMillis, down.position)
         var delta = 0f
-        motion.pressed = true
-        val drag = try {
-            awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ ->
-                change.consume()
-                delta = change.position.x - down.position.x
+        var crossed = startPosition.roundToInt()
+        fun followFinger(deformation: Float) {
+            val position = anchors.positionAt(startX + delta)
+            motion.drag(position, deformation)
+            val nearest = position.roundToInt()
+            // A small dead band avoids repeated ticks if the finger barely jitters
+            // across a midpoint. Fast movement is limited to one tick per event.
+            if (nearest != crossed && abs(position - crossed) >= .54f) {
+                crossed = nearest
+                if (!reduced) tick()
             }
-        } finally {
-            motion.pressed = false
-        } ?: return@awaitEachGesture
-
-        val center = start.center.x
-        val previous = motion.bounds[origin - 1]?.center?.x
-        val next = motion.bounds[origin + 1]?.center?.x
-        val low = minOf(center, previous ?: center, next ?: center)
-        val high = maxOf(center, previous ?: center, next ?: center)
-        fun followFinger() {
-            val raw = center + delta
-            val clamped = raw.coerceIn(low, high)
-            val outerExcess = when {
-                origin == 0 && delta * direction < 0f -> delta
-                origin == lastIndex && delta * direction > 0f -> delta
-                else -> 0f
-            }
-            motion.move(clamped + (outerExcess * .16f).coerceIn(-6.dp.toPx(), 6.dp.toPx()))
         }
-        velocity.addPosition(drag.uptimeMillis, drag.position)
-        var activePointerId = drag.id
-        var lastSpeed = 0f
-        followFinger()
-        val released = try {
-            horizontalDrag(drag.id) { change ->
+        try {
+            val drag = awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ ->
+                if (motion.isHolding(token)) {
+                    change.consume()
+                    delta = change.position.x - down.position.x
+                }
+            } ?: return@awaitEachGesture
+            if (!motion.isHolding(token)) return@awaitEachGesture
+            velocity.addPosition(drag.uptimeMillis, drag.position)
+            var activePointerId = drag.id
+            var lastSpeed = 0f
+            followFinger(0f)
+            val released = horizontalDrag(drag.id) { change ->
+                if (!motion.isHolding(token)) return@horizontalDrag
                 val dx = change.positionChange().x
                 delta += dx
                 val elapsed = (change.uptimeMillis - change.previousUptimeMillis).coerceAtLeast(1)
                 val speed = (abs(dx) * 1000f / elapsed / 1500.dp.toPx()).coerceIn(0f, 1f)
-                val stretch = speed * .032f + (speed - lastSpeed).coerceAtLeast(0f) * .014f
-                motion.speedStretch = motion.speedStretch * .6f + stretch * .4f
-                lastSpeed = speed
+                val stretch = (speed * .036f + (speed - lastSpeed) * .014f).coerceIn(-.014f, .048f)
                 if (change.id != activePointerId) {
                     activePointerId = change.id
                     velocity.resetTracking()
                 }
+                lastSpeed = speed
                 velocity.addPosition(change.uptimeMillis, change.position)
                 change.consume()
-                followFinger()
+                followFinger(motion.deformation * .38f + stretch * .62f)
+            }
+            if (released && motion.isHolding(token)) {
+                currentEvent.changes.firstOrNull { it.id == activePointerId }?.let {
+                    velocity.addPosition(it.uptimeMillis, it.position)
+                }
+                val center = startX + delta
+                val velocityX = velocity.calculateVelocity().x
+                val target = anchors.snapTarget(center, velocityX)
+                motion.settle(pager, target, anchors.pageVelocity(center, velocityX), reduced, select)
             }
         } catch (cancelled: CancellationException) {
-            motion.reset()
+            if (motion.isHolding(token)) motion.reset()
             throw cancelled
         } finally {
-            motion.speedStretch = 0f
+            if (motion.isHolding(token)) {
+                motion.settle(pager, pager.targetPage, 0f, reduced, select = null)
+            }
+            changeOwnership(false)
         }
-        currentEvent.changes.firstOrNull { it.id == activePointerId }?.let {
-            velocity.addPosition(it.uptimeMillis, it.position)
-        }
-        val neighbor = if (delta * direction < 0f) previous else next
-        val distance = neighbor?.let { abs(it - center) } ?: start.width
-        val target = if (released) lensDragTarget(
-            origin, lastIndex, delta * direction, distance,
-            velocity.calculateVelocity().x * direction, 620.dp.toPx(),
-        ) else origin
-        motion.release(pager, origin, target, center, reduced, select)
     }
 }
 
@@ -333,48 +381,39 @@ private fun Modifier.positionNavigationLens(
 ) = layout { measurable, constraints ->
     if (constraints.maxWidth == 0 || constraints.maxHeight == 0) return@layout layout(constraints.maxWidth, constraints.maxHeight) {}
     val last = pager.pageCount - 1
-    val page = (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, last.toFloat())
+    val page = motion.position(pager.indicatorPage(reduced)).coerceIn(0f, last.toFloat())
     val index = page.toInt()
     val start = motion.bounds[index]
     val end = motion.bounds[(index + 1).coerceAtMost(last)]
     if (start == null || end == null) return@layout layout(constraints.maxWidth, constraints.maxHeight) {}
     val fraction = page - index
-    val center = motion.center(page, start.center.x + (end.center.x - start.center.x) * fraction)
+    val center = start.center.x + (end.center.x - start.center.x) * fraction
     val restWidth = (start.width + (end.width - start.width) * fraction).coerceAtLeast(1f)
-    val stretch = if (reduced) 1f else motion.stretch(page, center, restWidth)
+    val stretch = if (reduced) 1f else 1f + .041f * sin(abs(page - round(page)) * PI).toFloat() + motion.deformation
     val raised = lift().coerceIn(0f, 1f)
-    val width = (restWidth * stretch * (.95f + (.16f - .045f * compact) * raised))
+    val width = (restWidth * stretch * (.95f + (.115f - .039f * compact) * raised))
         .roundToInt().coerceIn(1, constraints.maxWidth)
-    val height = (constraints.maxHeight * (.86f + .18f * raised)).roundToInt().coerceAtLeast(1)
-    val rise = (5.dp.toPx() * raised).roundToInt()
+    val height = (constraints.maxHeight * (.86f + .14f * raised)).roundToInt().coerceAtLeast(1)
+    val rise = (4.dp.toPx() * raised).roundToInt()
     val lens = measurable.measure(Constraints.fixed(width, height))
     layout(constraints.maxWidth, constraints.maxHeight) {
         lens.place((center - width / 2f).roundToInt(), (constraints.maxHeight - height) / 2 - rise)
     }
 }
 
-internal fun lensDragTarget(origin: Int, last: Int, delta: Float, distance: Float, velocity: Float, flingThreshold: Float): Int {
-    if (distance <= 0f) return origin
-    val progress = abs(delta) / distance
-    val fastEnough = velocity.sign == delta.sign && abs(velocity) >= flingThreshold
-    val direction = if (progress >= .35f || progress >= .08f && fastEnough) delta.sign.toInt() else 0
-    return (origin + direction).coerceIn(0, last)
-}
-
 @Composable private fun NavigationTab(
     tab: LumaTab,
-    pager: PagerState,
+    chosen: Boolean,
     index: Int,
-    reduced: Boolean,
     compact: Float,
     interactions: MutableInteractionSource,
     onSelect: () -> Unit,
+    visualPosition: () -> Float,
     modifier: Modifier,
 ) {
-    val chosen = pager.settledPage == index
-    val strength = (1f - abs(pager.indicatorPage(reduced) - index)).coerceIn(0f, 1f)
+    val strength = (1f - abs(visualPosition() - index)).coerceIn(0f, 1f)
     val ink = LocalContentColor.current
-    val selectedInk = lerp(ink, MaterialTheme.colorScheme.primary, .48f)
+    val selectedInk = lerp(ink, MaterialTheme.colorScheme.primary, .22f)
     val tint = lerp(ink, selectedInk, strength)
     Column(
         modifier.heightIn(min = lerp(56.dp, 48.dp, compact)).clip(LumaShapes.Pill)

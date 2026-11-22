@@ -20,7 +20,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import jp.noppy.lumamusic.LumaApp
-import jp.noppy.lumamusic.MainActivity
+import jp.noppy.lumamusic.AurioActivity
 import jp.noppy.lumamusic.R
 import jp.noppy.lumamusic.core.PcmSpec
 import jp.noppy.lumamusic.core.SmartShuffleCheckpoint
@@ -101,7 +101,7 @@ class PlaybackService : MediaSessionService() {
                 TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED).build()).build()
         // Remain conservative before asynchronous preferences arrive.
         app.output.processingIsUnchanged(false)
-        val activity = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val activity = PendingIntent.getActivity(this, 0, Intent(this, AurioActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         session = MediaSession.Builder(this, SessionQueuePlayer(player, shuffle::beforePlay))
             .setSessionActivity(activity)
             .setCallback(SessionCallbacks())

@@ -1,1 +1,9 @@
-<resources><string name="app_name">Aurio</string></resources>
+<resources>
+    <string name="app_name">Aurio</string>
+    <string name="icon_settings">アプリアイコン</string>
+    <string name="icon_rose">ローズ（標準）</string>
+    <string name="icon_sapphire">サファイア</string>
+    <string name="icon_jade">ジェイド</string>
+    <string name="icon_amethyst">アメジスト</string>
+    <string name="icon_change_failed">アイコンを変更できませんでした。もう一度お試しください。</string>
+</resources>

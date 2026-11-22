@@ -1,1 +1,8 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"><queries><provider android:authorities="jp.noppy.lumamusic.test.bench" /></queries></manifest>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <provider android:authorities="jp.noppy.lumamusic.test.bench" />
+    </queries>
+    <application>
+        <activity android:name=".GlassDiagnosticsActivity" android:exported="true" />
+    </application>
+</manifest>

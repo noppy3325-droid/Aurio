@@ -49,7 +49,7 @@ class PlaybackDeviceTest {
         return File(context.filesDir, "validation-$rate.wav").apply { writeBytes(bytes.array()) }
     }
     @Test fun silent44100And48000PlayThroughSessionAndReportActualTrack() {
-        context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        context.startActivity(Intent(context, AurioActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         var future: com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
         main { future = MediaController.Builder(context, SessionToken(context, ComponentName(context, PlaybackService::class.java))).buildAsync() }
         val controller = future!!.get(15, TimeUnit.SECONDS)

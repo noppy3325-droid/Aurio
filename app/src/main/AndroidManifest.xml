@@ -4,10 +4,29 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <application android:name=".LumaApp" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:theme="@style/Theme.Luma" android:allowBackup="false" android:supportsRtl="true">
-        <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize">
+    <application android:name=".LumaApp" android:label="@string/app_name" android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher" android:theme="@style/Theme.Luma" android:allowBackup="false" android:supportsRtl="true">
+        <activity android:name=".AurioActivity" android:exported="false" android:configChanges="orientation|screenSize"
+            android:taskAffinity="${applicationId}.player" />
+        <activity android:name=".LauncherEntryActivity" android:exported="false" android:noHistory="true"
+            android:excludeFromRecents="true" android:taskAffinity="${applicationId}.launcher"
+            android:theme="@android:style/Theme.NoDisplay" />
+        <activity-alias android:name=".MainActivity" android:targetActivity=".LauncherEntryActivity" android:exported="true"
+            android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:label="@string/app_name">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
-        </activity>
+        </activity-alias>
+        <activity-alias android:name=".LauncherSapphire" android:targetActivity=".LauncherEntryActivity" android:exported="true" android:enabled="false"
+            android:icon="@mipmap/ic_launcher_sapphire" android:roundIcon="@mipmap/ic_launcher_sapphire" android:label="@string/app_name">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".LauncherJade" android:targetActivity=".LauncherEntryActivity" android:exported="true" android:enabled="false"
+            android:icon="@mipmap/ic_launcher_jade" android:roundIcon="@mipmap/ic_launcher_jade" android:label="@string/app_name">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".LauncherAmethyst" android:targetActivity=".LauncherEntryActivity" android:exported="true" android:enabled="false"
+            android:icon="@mipmap/ic_launcher_amethyst" android:roundIcon="@mipmap/ic_launcher_amethyst" android:label="@string/app_name">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity-alias>
         <service android:name=".playback.PlaybackService" android:exported="true" android:foregroundServiceType="mediaPlayback">
             <intent-filter><action android:name="androidx.media3.session.MediaSessionService" /></intent-filter>
         </service>

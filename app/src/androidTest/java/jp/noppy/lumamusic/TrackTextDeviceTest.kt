@@ -31,9 +31,9 @@ class TrackTextDeviceTest {
     @Test fun longMixedTitleEllipsizesAtLargerScaleAndKeepsFullAccessibilityText() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val activity = instrumentation.startActivitySync(
-            Intent(instrumentation.targetContext, MainActivity::class.java)
+            Intent(instrumentation.targetContext, AurioActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-        ) as MainActivity
+        ) as AurioActivity
         val title = "あなたの夜が明けるまで (feat. ＩＡ) / A long mixed-language title"
         val result = AtomicReference<TextLayoutResult>()
         val laidOut = CountDownLatch(1)

@@ -7,11 +7,13 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
+import androidx.compose.foundation.pager.PagerSnapDistance
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -52,6 +54,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import kotlin.math.abs
 
 @Composable fun LumaScreen(vm: LumaViewModel, standby: StandbyController) {
     val tracks by vm.tracks.collectAsStateWithLifecycle()
@@ -85,6 +88,7 @@ import java.time.format.DateTimeFormatter
     val tabState = rememberSaveableStateHolder()
     val navigationScope = rememberCoroutineScope()
     var tabChange by remember { mutableStateOf<Job?>(null) }
+    var lensOwnsPointer by remember { mutableStateOf(false) }
     val quality = effectiveGlassQuality(prefs.glassQuality, prefs.reducedMotion)
     val reducedMotion = prefs.reducedMotion || quality == GlassQuality.REDUCED
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
@@ -96,11 +100,45 @@ import java.time.format.DateTimeFormatter
     val hasMiniPlayer = playback.mediaId != null && !imeVisible
     SideEffect { dockScroll.enabled = canSwipeTabs && hasMiniPlayer }
     LaunchedEffect(pager.settledPage, hasMiniPlayer, dockScroll) { dockScroll.expand() }
-    val tabFling = PagerDefaults.flingBehavior(pager, snapPositionalThreshold = .32f)
+    val snapDistance = remember(pager, reducedMotion) {
+        val adjacent = PagerSnapDistance.atMost(1)
+        val acrossTabs = PagerSnapDistance.atMost((LumaTabs.size - 1).coerceAtLeast(1))
+        object : PagerSnapDistance {
+            override fun calculateTargetPage(
+                startPage: Int,
+                suggestedTargetPage: Int,
+                velocity: Float,
+                pageSize: Int,
+                pageSpacing: Int,
+            ): Int {
+                // Pager provides the start-side edge of the visible interval in the fling direction.
+                // settledPage may already be the nearest page after the drag releases.
+                val travel = abs(pager.currentPage + pager.currentPageOffsetFraction - startPage)
+                val speedInPages = abs(velocity) / (pageSize + pageSpacing).coerceAtLeast(1)
+                val canSkip = !reducedMotion && travel >= .45f && speedInPages >= 2.4f
+                if (!canSkip) {
+                    // A zero-length approach leaves the final snap to the two visible bounds.
+                    return adjacent.calculateTargetPage(startPage, suggestedTargetPage, velocity, pageSize, pageSpacing)
+                }
+                // The decay estimate is rounded down before Pager requests its final snap.
+                // Give a deliberate fling enough approach distance to pass the adjacent tab.
+                val target = if (velocity > 0) maxOf(suggestedTargetPage, startPage + 2)
+                else minOf(suggestedTargetPage, startPage - 2)
+                return acrossTabs.calculateTargetPage(startPage, target, velocity, pageSize, pageSpacing)
+                    .coerceIn(0, LumaTabs.lastIndex)
+            }
+        }
+    }
+    val tabFling = if (reducedMotion) {
+        PagerDefaults.flingBehavior(pager, pagerSnapDistance = snapDistance, snapPositionalThreshold = .32f, snapAnimationSpec = snap())
+    } else {
+        PagerDefaults.flingBehavior(pager, pagerSnapDistance = snapDistance, snapPositionalThreshold = .32f)
+    }
     fun selectTab(index: Int) {
         focus.clearFocus()
         keyboard?.hide()
         tabChange?.cancel()
+        if (!pager.isScrollInProgress && pager.settledPage == index) return
         tabChange = navigationScope.launch {
             if (reducedMotion) pager.scrollToPage(index)
             else pager.animateScrollToPage(index, animationSpec = spring(dampingRatio = .94f, stiffness = Spring.StiffnessMedium))
@@ -157,7 +195,7 @@ import java.time.format.DateTimeFormatter
                                 state = pager,
                                 modifier = Modifier.fillMaxSize().nestedScroll(dockScroll)
                                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
-                                userScrollEnabled = canSwipeTabs,
+                                userScrollEnabled = canSwipeTabs && !lensOwnsPointer,
                                 flingBehavior = tabFling,
                                 key = { LumaTabs[it].key },
                             ) { index ->
@@ -203,6 +241,7 @@ import java.time.format.DateTimeFormatter
                                         bottom = LumaDock.BottomMargin,
                                     ),
                                 miniPlayer = miniPlayer,
+                                onLensOwnershipChanged = { lensOwnsPointer = it },
                             )
                         })
                         if (playback.mediaId != null) {

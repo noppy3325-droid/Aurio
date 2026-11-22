@@ -51,6 +51,7 @@ internal fun PlaybackDock(
     selectTab: (Int) -> Unit,
     modifier: Modifier,
     miniPlayer: (@Composable (Modifier, Float, Float) -> Unit)?,
+    onLensOwnershipChanged: (Boolean) -> Unit = {},
 ) {
     val reduced = LocalReducedMotion.current
     val fontScale = LocalDensity.current.fontScale
@@ -100,6 +101,7 @@ internal fun PlaybackDock(
             Modifier.align(Alignment.BottomStart).offset(x = navX).width(navWidth).height(rowHeight),
             compact = resize,
             surfaceOpacity = separateChrome,
+            onLensOwnershipChanged = onLensOwnershipChanged,
         )
     }
 }

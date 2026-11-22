@@ -23,9 +23,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -49,6 +54,34 @@ internal data class GlassEffects(
 )
 
 internal val LocalGlassEffects = staticCompositionLocalOf { GlassEffects() }
+internal data class GlassSample(
+    val surfaceId: Any,
+    val sampleBounds: Rect,
+    val sourceBounds: Rect,
+    val sourceRevision: Long,
+    val selectionLens: Boolean,
+)
+
+internal val LocalGlassSampleObserver = staticCompositionLocalOf<((GlassSample) -> Unit)?> { null }
+
+// Diagnostics only. Reporting a recording must not invalidate composition.
+private class GlassCaptureProbe {
+    var revision = 0L
+    var coordinates: LayoutCoordinates? = null
+}
+
+private class GlassSurfaceProbe {
+    val id = Any()
+    var coordinates: LayoutCoordinates? = null
+}
+
+private val LocalGlassCaptureProbe = staticCompositionLocalOf<GlassCaptureProbe?> { null }
+
+private fun LayoutCoordinates.unclippedRootBounds(): Rect {
+    val origin = positionInRoot()
+    return Rect(origin.x, origin.y, origin.x + size.width, origin.y + size.height)
+}
+
 val LocalLiquidBackdrop = staticCompositionLocalOf<Backdrop?> { null }
 val LocalGlassQuality = staticCompositionLocalOf { GlassQuality.BALANCED }
 val LocalReducedMotion = staticCompositionLocalOf { false }
@@ -90,13 +123,28 @@ val LocalReducedMotion = staticCompositionLocalOf { false }
     content: @Composable BoxScope.() -> Unit,
     overlay: @Composable BoxScope.() -> Unit,
 ) {
-    val source = if (capture && LocalGlassQuality.current != GlassQuality.OFF && Build.VERSION.SDK_INT >= 31) {
-        rememberLayerBackdrop()
-    } else null
-    CompositionLocalProvider(LocalLiquidBackdrop provides source) {
+    val canCapture = capture && LocalGlassQuality.current != GlassQuality.OFF && Build.VERSION.SDK_INT >= 31
+    val probe = if (canCapture && LocalGlassSampleObserver.current != null) remember { GlassCaptureProbe() } else null
+    val source = when {
+        !canCapture -> null
+        probe == null -> rememberLayerBackdrop()
+        else -> {
+            val record: ContentDrawScope.() -> Unit = remember(probe) {
+                {
+                    drawContent()
+                    probe.revision++
+                }
+            }
+            rememberLayerBackdrop(onDraw = record)
+        }
+    }
+    CompositionLocalProvider(LocalLiquidBackdrop provides source, LocalGlassCaptureProbe provides probe) {
         Box(modifier) {
             val sourceLayer = if (source == null) Modifier else Modifier.layerBackdrop(source)
-            Box(Modifier.matchParentSize().then(sourceLayer), content = content)
+            val observedSource = if (probe == null) sourceLayer else {
+                sourceLayer.onGloballyPositioned { probe.coordinates = it }
+            }
+            Box(Modifier.matchParentSize().then(observedSource), content = content)
             overlay()
         }
     }
@@ -119,34 +167,48 @@ val LocalReducedMotion = staticCompositionLocalOf { false }
     if (source == null || quality == GlassQuality.OFF || Build.VERSION.SDK_INT < 31) {
         return clip(shape).background(if (selectionLens) selected else neutral)
     }
+    val observer = LocalGlassSampleObserver.current
+    val captureProbe = LocalGlassCaptureProbe.current
+    val surfaceProbe = if (observer != null && captureProbe != null) remember { GlassSurfaceProbe() } else null
+    val positioned = if (surfaceProbe == null) this else onGloballyPositioned { surfaceProbe.coordinates = it }
     val optical = quality != GlassQuality.REDUCED && Build.VERSION.SDK_INT >= 33
-    val softness = when {
-        selectionLens && optical -> 1.2f
-        optical && quality == GlassQuality.HIGH -> 3f
-        optical -> 2.2f
-        else -> 3.5f
-    }
-    return drawBackdrop(
+    return positioned.drawBackdrop(
         backdrop = source,
         shape = { shape },
         highlight = if (!optical && effects.highlight) ({ highlight.copy(alpha = .44f) }) else null,
         shadow = if (effects.shadow) ({
-            shadow.copy(alpha = (if (selectionLens) .25f else .52f) + .35f * lensLift().coerceIn(0f, 1f))
+            shadow.copy(alpha = (if (selectionLens) .18f else .38f) + .25f * lensLift().coerceIn(0f, 1f))
         }) else null,
         effects = {
             if (size.isSpecified && size.minDimension > 0f) {
-                if (effects.blur) blur(softness.dp.toPx())
                 if (optical && Build.VERSION.SDK_INT >= 33) {
                     val corner = if (selectionLens) size.minDimension / 2f else radius.dp.toPx().coerceAtMost(size.minDimension / 2f)
                     glassOptics(corner, dark, quality == GlassQuality.HIGH, selectionLens, lensLift().coerceIn(0f, 1f), effects)
-                } else if (effects.tint) {
-                    colorControls(brightness = if (dark) -.22f else .24f, contrast = .65f)
+                } else {
+                    if (effects.blur) blur(2.5.dp.toPx())
+                    if (effects.tint) colorControls(brightness = if (dark) -.22f else .24f, contrast = .65f)
+                }
+            }
+        },
+        onDrawBackdrop = { sample ->
+            sample()
+            if (observer != null && captureProbe != null && surfaceProbe != null) {
+                val coordinates = surfaceProbe.coordinates
+                val sourceCoordinates = captureProbe.coordinates
+                if (coordinates?.isAttached == true && sourceCoordinates?.isAttached == true) {
+                    observer(GlassSample(
+                        surfaceProbe.id,
+                        coordinates.unclippedRootBounds(),
+                        sourceCoordinates.unclippedRootBounds(),
+                        captureProbe.revision,
+                        selectionLens,
+                    ))
                 }
             }
         },
         onDrawSurface = {
             if (!optical && effects.tint) {
-                drawRect((if (selectionLens) selected else neutral).copy(alpha = if (dark) .38f else .30f))
+                drawRect((if (selectionLens) selected else neutral).copy(alpha = if (dark) .32f else .23f))
             }
         },
     )

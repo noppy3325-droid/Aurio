@@ -13,20 +13,21 @@ internal fun BackdropEffectScope.glassOptics(
     lift: Float,
     effects: GlassEffects,
 ) {
-    if (!effects.refraction && !effects.highlight && !effects.tint) return
-    val rim = (if (selection) 9f + 3f * lift else 7f + 2f * lift).dp.toPx()
-    val shift = (if (selection) 7f + 4f * lift else 4f + 2f * lift).dp.toPx()
-    val quality = if (highQuality) 1.25f else 1f
+    if (!effects.blur && !effects.refraction && !effects.highlight && !effects.tint) return
+    val rim = (if (selection) 8.5f + 2.6f * lift else 6.4f + 1.6f * lift).dp.toPx()
+    val shift = (if (selection) 5.6f + 3.6f * lift else 3.1f + 1.8f * lift).dp.toPx()
+    val quality = if (highQuality) 1.16f else 1f
+    val softness = if (highQuality) 1.45f else 1.05f
     runtimeShaderEffect("AurioGlassOptics", GlassShader, "scene") {
         setFloatUniform("extent", size.width, size.height)
         setFloatUniform("inset", padding, padding)
         setFloatUniform("radius", radius)
         setFloatUniform("rimWidth", rim)
         setFloatUniform("travel", if (effects.refraction) shift * quality else 0f)
-        setFloatUniform("rimLight", if (effects.highlight) .32f + .20f * lift else 0f)
-        setFloatUniform("glintWidth", (1.6f + .35f * lift).dp.toPx())
+        setFloatUniform("rimLight", if (effects.highlight) .23f + .22f * lift else 0f)
+        setFloatUniform("glintWidth", (1.05f + .33f * lift).dp.toPx())
         setFloatUniform("adaptive", if (effects.tint) 1f else 0f)
-        setFloatUniform("detailRadius", if (effects.blur) 2.2.dp.toPx() else 0f)
+        setFloatUniform("softness", if (effects.blur) softness.dp.toPx() else 0f)
         setFloatUniform("darkSurface", if (dark) 1f else 0f)
         setFloatUniform("selectionDepth", if (selection) 1f else 0f)
     }
@@ -45,7 +46,7 @@ private const val GlassShader = """
     uniform float rimLight;
     uniform float glintWidth;
     uniform float adaptive;
-    uniform float detailRadius;
+    uniform float softness;
     uniform float darkSurface;
     uniform float selectionDepth;
 
@@ -63,36 +64,41 @@ private const val GlassShader = """
         float2 low = inset + 0.5;
         float2 high = max(low, inset + extent - 0.5);
         half4 ray = scene.eval(clamp(samplePoint, low, high));
+        if (softness > 0.0) {
+            // Keep most of the central ray. Symmetric taps soften high-frequency
+            // edges without a full-surface blur pass or a shifted duplicate.
+            float2 tap = float2(0.707, 0.707) * softness;
+            half4 fringe = (
+                scene.eval(clamp(samplePoint - tap, low, high)) +
+                scene.eval(clamp(samplePoint + tap, low, high))
+            ) * 0.5;
+            ray = mix(ray, fringe, half(0.16 + 0.21 * edge));
+        }
         float3 colour = ray.rgb / max(ray.a, 0.001);
         float3 weights = float3(0.2126, 0.7152, 0.0722);
         float luminance = dot(colour, weights);
-        float detail = 0.0;
-        if (detailRadius > 0.0 && (adaptive > 0.5 || rimLight > 0.0)) {
-            float2 nearbyPoint = samplePoint + float2(0.82, 0.57) * detailRadius;
-            half4 nearbyRay = scene.eval(clamp(nearbyPoint, low, high));
-            float3 nearby = nearbyRay.rgb / max(nearbyRay.a, 0.001);
-            detail = smoothstep(0.09, 0.32, abs(luminance - dot(nearby, weights)));
-            colour = mix(colour, nearby, detail * 0.21);
-            luminance = dot(colour, weights);
-        }
 
-        // Lift dark detail behind dark text, or lower highlights behind white
-        // text. Preserve the nearby hue and leave already-legible areas clear.
         if (adaptive > 0.5) {
-            float3 lightened = mix(colour, float3(0.98), clamp((0.72 - luminance) / max(0.98 - luminance, 0.01), 0.0, 0.73));
-            float3 shaded = colour * min(1.0, 0.33 / max(luminance, 0.01));
+            // Compress tones that compete with the foreground ink. Both
+            // curves retain tonality instead of clipping shadows/highlights
+            // to a single luminance, and leave compatible pixels untouched.
+            float lightLift = max(0.0, 0.54 + luminance * 0.39 - luminance);
+            // Work in an approximation of linear light for dark mode so
+            // saturated greens and reds also stay behind the light ink.
+            float energy = dot(colour * colour, weights);
+            float darkScale = sqrt(min(1.0, (0.036 + energy * 0.059) / max(energy, 0.001)));
+            float3 lightened = mix(colour, float3(1.0), lightLift / max(1.0 - luminance, 0.01));
+            float3 shaded = colour * darkScale;
             colour = mix(lightened, shaded, darkSurface);
-            // A thicker lens changes transmission slightly so its outline is
-            // still visible over an evenly lit page.
-            float3 transmission = mix(colour * 0.957, mix(colour, float3(1.0), 0.052), darkSurface);
+            float3 transmission = mix(colour * 0.968, mix(colour, float3(1.0), 0.028), darkSurface);
             colour = mix(colour, transmission, selectionDepth);
         }
 
         if (rimLight > 0.0) {
             float rim = 1.0 - smoothstep(0.0, glintWidth, distanceInside);
             float facing = dot(normal, float2(-0.6, -0.8));
-            float gleam = clamp(facing, 0.0, 1.0) * (0.95 - 0.52 * luminance);
-            float occlusion = clamp(-facing, 0.0, 1.0) * (0.13 + 0.36 * luminance + 0.10 * detail);
+            float gleam = clamp(facing, 0.0, 1.0) * (0.91 - 0.54 * luminance);
+            float occlusion = clamp(-facing, 0.0, 1.0) * (0.14 + 0.38 * luminance);
             colour = mix(colour, float3(1.0), rimLight * gleam * rim);
             colour *= 1.0 - rimLight * occlusion * rim;
         }

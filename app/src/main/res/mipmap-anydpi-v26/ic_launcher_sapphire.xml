@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/launcher_sapphire" />
+    <foreground android:drawable="@drawable/aurio_launcher_sapphire" />
+    <monochrome android:drawable="@drawable/ic_aurio_monochrome" />
+</adaptive-icon>

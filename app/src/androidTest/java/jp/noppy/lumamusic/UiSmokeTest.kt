@@ -151,23 +151,33 @@ class UiSmokeTest {
         durationMs: Long = 300,
         frame: String? = null,
         cancel: Boolean = false,
+        reverse: Boolean = false,
+        frameStep: Int = 5,
+        simulateFlickTiming: Boolean = false,
+        inspect: (() -> Unit)? = null,
     ) {
         val view = activity.window.decorView
         val down = SystemClock.uptimeMillis()
-        fun dispatch(action: Int, fraction: Float) {
+        fun dispatch(action: Int, fraction: Float, eventTime: Long = SystemClock.uptimeMillis()) {
             val x = (fromX + (toX - fromX) * fraction) * view.width
             val y = (fromY + (toY - fromY) * fraction) * view.height
-            val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
+            val event = MotionEvent.obtain(down, eventTime, action, x, y, 0)
             event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
             try { main { activity.dispatchTouchEvent(event) } } finally { event.recycle() }
         }
-        dispatch(MotionEvent.ACTION_DOWN, 0f)
+        dispatch(MotionEvent.ACTION_DOWN, 0f, down)
         for (step in 1..10) {
             Thread.sleep(durationMs / 10)
-            dispatch(MotionEvent.ACTION_MOVE, step / 10f)
-            if (step == 5 && frame != null) screenshot(frame)
+            val progress = step / 10f
+            val eventTime = if (simulateFlickTiming) down + durationMs * step / 10 else SystemClock.uptimeMillis()
+            dispatch(MotionEvent.ACTION_MOVE, if (reverse) 1f - kotlin.math.abs(2f * progress - 1f) else progress, eventTime)
+            if (step == frameStep) {
+                if (frame != null) screenshot(frame)
+                inspect?.invoke()
+            }
         }
-        dispatch(if (cancel) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP, 1f)
+        val releaseTime = if (simulateFlickTiming) down + durationMs + 1 else SystemClock.uptimeMillis()
+        dispatch(if (cancel) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP, if (reverse) 0f else 1f, releaseTime)
     }
 
     private fun tabSelected(label: String): Boolean = nodes().any { node ->
@@ -177,7 +187,7 @@ class UiSmokeTest {
 
     @Test fun pageSwipeAndDirectLensDragUseTheirOwnDirections() {
         val activity = instrumentation.startActivitySync(
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            Intent(context, AurioActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
         )
         try {
             eventually("home is selected") { tabSelected("ホーム") }
@@ -190,7 +200,8 @@ class UiSmokeTest {
             }
             val (homeX, homeY) = center("ホーム")
             val (libraryX, libraryY) = center("ライブラリ")
-            screenshot("v027-lens-rest")
+            val (playlistX, playlistY) = center("プレイリスト")
+            screenshot("v56-lens-rest")
             val pressStarted = SystemClock.uptimeMillis()
             fun lensTouch(action: Int) {
                 val event = MotionEvent.obtain(pressStarted, SystemClock.uptimeMillis(), action, homeX * view.width, homeY * view.height, 0)
@@ -199,22 +210,52 @@ class UiSmokeTest {
             }
             lensTouch(MotionEvent.ACTION_DOWN)
             try {
-                screenshot("v027-lens-raised")
+                screenshot("v56-lens-raised")
             } finally {
                 lensTouch(MotionEvent.ACTION_CANCEL)
             }
-            swipe(activity, homeX, homeY, libraryX, homeY, 380, cancel = true)
+            swipe(activity, homeX, homeY, playlistX, homeY, 440, cancel = true)
             Thread.sleep(700)
             eventually("cancelled lens drag stays on home") { tabSelected("ホーム") }
-            swipe(activity, homeX, homeY, libraryX, homeY, 380, frame = "v027-lens-drag")
-            eventually("right lens drag lands on library") { tabSelected("ライブラリ") }
-            swipe(activity, .79f, .55f, .21f, .55f, 380, frame = "rev2-body-swipe")
-            eventually("left body swipe lands on search") { tabSelected("検索") }
-            val (searchX, searchY) = center("検索")
-            swipe(activity, searchX, searchY, libraryX, searchY, 380)
-            eventually("left lens drag lands on library") { tabSelected("ライブラリ") }
-            swipe(activity, libraryX, libraryY, homeX, libraryY, 380)
-            eventually("left lens drag lands on home") { tabSelected("ホーム") }
+            swipe(activity, homeX, homeY, playlistX, homeY, 650, reverse = true, frameStep = 5) {
+                assertTrue("Reversing at the far side must not commit an intermediate page", tabSelected("ホーム"))
+            }
+            eventually("reversal ends back on home") { tabSelected("ホーム") }
+            swipe(activity, homeX, homeY, homeX + .032f, homeY, 360)
+            eventually("short drag stays on home") { tabSelected("ホーム") }
+
+            swipe(activity, homeX, homeY, playlistX, homeY, 600, frame = "v56-lens-through-search", frameStep = 7) {
+                assertTrue("Crossing Search must only preview, not change the selected page", tabSelected("ホーム"))
+            }
+            eventually("one right drag from Home reaches Playlists") { tabSelected("プレイリスト") }
+            screenshot("v56-lens-playlists")
+            swipe(activity, playlistX, playlistY, homeX, playlistY, 600, frame = "v56-lens-return-through-library", frameStep = 7) {
+                assertTrue("Dragging back must keep Playlists selected until release", tabSelected("プレイリスト"))
+            }
+            eventually("one left drag from Playlists reaches Home") { tabSelected("ホーム") }
+            screenshot("v56-lens-home")
+
+            swipe(activity, .79f, .55f, .21f, .55f, 430)
+            eventually("ordinary left body swipe lands on the next page, Library") { tabSelected("ライブラリ") }
+            swipe(activity, libraryX, libraryY, playlistX, libraryY, 420)
+            eventually("one drag from Library passes Search and reaches Playlists") { tabSelected("プレイリスト") }
+            swipe(activity, .21f, .55f, .79f, .55f, 430)
+            eventually("ordinary right body swipe lands on the previous page, Search") { tabSelected("検索") }
+            click("ホーム", tab = true)
+            eventually("a tab tap selects Home") { tabSelected("ホーム") }
+            swipe(activity, .66f, .55f, .49f, .55f, 30, simulateFlickTiming = true)
+            repeat(5) {
+                Thread.sleep(180)
+                assertFalse("A short, fast body flick must not skip pages", tabSelected("検索") || tabSelected("プレイリスト"))
+            }
+            if (!tabSelected("ホーム")) click("ホーム", tab = true)
+            eventually("Home is selected before the long body flick") { tabSelected("ホーム") }
+            swipe(activity, .94f, .55f, .06f, .55f, 80, simulateFlickTiming = true)
+            eventually("a strong body flick advances at least two pages") { tabSelected("検索") || tabSelected("プレイリスト") }
+            if (!tabSelected("プレイリスト")) click("プレイリスト", tab = true)
+            eventually("Playlists is selected before the reverse body flick") { tabSelected("プレイリスト") }
+            swipe(activity, .06f, .55f, .94f, .55f, 80, simulateFlickTiming = true)
+            eventually("a strong reverse body flick returns at least two pages") { tabSelected("ライブラリ") || tabSelected("ホーム") }
         } finally {
             main { activity.finish() }
         }
@@ -335,7 +376,7 @@ class UiSmokeTest {
                 player.shuffleModeEnabled = false
                 player.prepare()
             }
-            activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+            activity = instrumentation.startActivitySync(Intent(context, AurioActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
             click(tracks.first().title, tab = true)
             eventually("expanded Now Playing") { textPresent("プレイヤーを閉じる") }
             tracks.forEachIndexed { index, track ->
@@ -455,7 +496,7 @@ class UiSmokeTest {
                 player.prepare()
                 player.play()
             }
-            activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+            activity = instrumentation.startActivitySync(Intent(context, AurioActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
             orientation = activity!!.requestedOrientation
             eventually("home navigation is visible") { tabSelected("ホーム") }
             screenshot("rev2-home")
@@ -545,22 +586,22 @@ class UiSmokeTest {
             screenshot("02-library-scroll-glass")
 
             frameStats(reset = true)
-            val navigationBounds = android.graphics.Rect()
-            val libraryTab = nodes().filter { it.text?.toString() == "ライブラリ" || it.contentDescription?.toString() == "ライブラリ" }
-                .maxByOrNull { node ->
-                    val bounds = android.graphics.Rect()
-                    node.getBoundsInScreen(bounds)
-                    bounds.centerY()
-                } ?: error("Library tab is not visible")
-            libraryTab.getBoundsInScreen(navigationBounds)
-            val navigationY = navigationBounds.centerY().toFloat() / activity.window.decorView.height
-            val libraryX = navigationBounds.centerX().toFloat() / activity.window.decorView.width
-            swipe(activity, libraryX, navigationY, libraryX + .18f, navigationY, 500, "19-bottom-navigation-drag")
+            fun dockTabBounds(label: String) = nodes()
+                .filter { it.text?.toString() == label || it.contentDescription?.toString() == label }
+                .map(::bounds)
+                .maxByOrNull { it.centerY() } ?: error("Missing dock tab: $label")
+            val dockView = activity.window.decorView
+            fun dragDockTab(from: String, to: String, frame: String? = null) {
+                val source = dockTabBounds(from)
+                val destination = dockTabBounds(to)
+                val y = source.centerY().toFloat() / dockView.height
+                swipe(activity, source.centerX().toFloat() / dockView.width, y, destination.centerX().toFloat() / dockView.width, y, 500, frame)
+            }
+            dragDockTab("ライブラリ", "検索", "19-bottom-navigation-drag")
             eventually("dragging the bottom navigation moves to search") { tabSelected("検索") }
-            val searchTab = nodes().filter { it.text?.toString() == "検索" || it.contentDescription?.toString() == "検索" }
-                .maxByOrNull { bounds(it).centerY() } ?: error("Search tab is not visible")
-            val searchX = bounds(searchTab).centerX().toFloat() / activity.window.decorView.width
-            swipe(activity, searchX, navigationY, searchX - .18f, navigationY, 500)
+            // Changing pages expands the compact dock and moves all tab centers.
+            Thread.sleep(700)
+            dragDockTab("検索", "ライブラリ")
             eventually("dragging the bottom navigation back restores library") { tabSelected("ライブラリ") }
             swipe(activity, .82f, .51f, .17f, .51f, frame = "15-tab-drag")
             eventually("search tab settles after horizontal swipe") { tabSelected("検索") }
@@ -691,7 +732,7 @@ class UiSmokeTest {
             screenshot("13-player-landscape")
             // Exercise the app's orientation callback, without changing global rotation/security settings.
             main {
-                val field = MainActivity::class.java.getDeclaredField("standby").apply { isAccessible = true }
+                val field = AurioActivity::class.java.getDeclaredField("standby").apply { isAccessible = true }
                 val standby = field.get(activity) as StandbyController
                 if (!standby.armed) standby.arm()
                 val sensorField = StandbyController::class.java.getDeclaredField("sensor").apply { isAccessible = true }

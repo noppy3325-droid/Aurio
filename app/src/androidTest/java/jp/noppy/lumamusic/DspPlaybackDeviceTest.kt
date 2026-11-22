@@ -30,7 +30,7 @@ class DspPlaybackDeviceTest {
         val i=InstrumentationRegistry.getInstrumentation();val ctx=i.targetContext;val app=ctx.applicationContext as LumaApp
         val savedSound=runBlocking { app.settings.soundSettings.first() }
         val savedSnapshot=runBlocking { app.settings.snapshot.first() }
-        ctx.startActivity(Intent(ctx,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        ctx.startActivity(Intent(ctx,AurioActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         var future:com.google.common.util.concurrent.ListenableFuture<MediaController>?=null
         i.runOnMainSync { future=MediaController.Builder(ctx,SessionToken(ctx,ComponentName(ctx,PlaybackService::class.java))).buildAsync() }
         val c=future!!.get(20,TimeUnit.SECONDS)

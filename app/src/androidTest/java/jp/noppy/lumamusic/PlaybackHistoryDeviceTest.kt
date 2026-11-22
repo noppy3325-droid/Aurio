@@ -37,7 +37,7 @@ class PlaybackHistoryDeviceTest {
         var pending: ListenableFuture<MediaController>? = null
         var controller: MediaController? = null
         try {
-            context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            context.startActivity(Intent(context, AurioActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             instrumentation.runOnMainSync {
                 val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
                 pending = MediaController.Builder(context, token).buildAsync()
