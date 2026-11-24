@@ -50,26 +50,13 @@ internal fun PlayerScreen(
     setPanel: (String) -> Unit
 ) {
     val title = track?.title ?: playback.title
-    val artist = track?.artist ?: playback.artist
     val album = track?.album.orEmpty().takeUnless {
         it.isBlank() || it == "不明なアルバム" || it.equals("Unknown Album", true) || it.equals("Unknown", true)
     }.orEmpty()
     val outputState by vm.output.collectAsStateWithLifecycle()
     var menu by rememberSaveable { mutableStateOf(false) }
     val detailsHeight = remember { mutableIntStateOf(0) }
-    val palette = artworkScene?.ambient?.palette ?: ArtworkAmbientPalette.Default
-    val playerColors = remember(palette) {
-        val tint = playerAmbientTone(palette.dominant, palette.accent)
-        darkColorScheme(
-            background = Color(0xFF161319),
-            surface = lerp(Color(0xFF201C23), tint, .32f),
-            surfaceVariant = lerp(Color(0xFF28242D), tint, .38f),
-            onBackground = Color.White,
-            onSurface = Color.White,
-            onSurfaceVariant = Color(0xFFFAF4F8),
-            primary = Color(0xFFF8C5D5)
-        )
-    }
+    val playerColors = artworkPlayerColors(artworkScene)
     MaterialTheme(colorScheme = playerColors) {
         LiquidBackdropHost(
             Modifier.fillMaxSize(),
@@ -127,33 +114,10 @@ internal fun PlayerScreen(
                             }
                         }
                         val details: @Composable ColumnScope.() -> Unit = {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    TrackText(title, style = if (compact) MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold) else MaterialTheme.typography.headlineMedium)
-                                    if (artist.isNotBlank()) {
-                                        Spacer(Modifier.height(2.dp))
-                                        val artistStyle = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium
-                                        TrackText(artist, style = artistStyle, color = playerColors.onSurfaceVariant)
-                                    }
-                                }
-                                PlayerGlassButton(
-                                    if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                    if (favorite) "お気に入りを解除" else "お気に入りに登録",
-                                    { track?.let { vm.favorite(it.uri) } },
-                                    enabled = track != null,
-                                    active = favorite,
-                                    tint = if (favorite) playerColors.primary else Color.White,
-                                )
-                            }
-                            SeekControls(vm, playback, compact = true, artworkBackdrop = true)
-                            PlaybackButtons(vm, playback, compact = compact)
-                            VolumeControl(bitPerfect = outputState.bitPerfectVolumeRestricted)
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                PlayerTool("歌詞", Icons.Rounded.Lyrics, panel == "lyrics", compact) { setPanel(if (panel == "lyrics") "player" else "lyrics") }
-                                PlayerTool("出力", Icons.Rounded.SpeakerGroup, false, compact, output)
-                                PlayerTool("キュー", Icons.AutoMirrored.Rounded.QueueMusic, panel == "queue", compact) { setPanel(if (panel == "queue") "player" else "queue") }
-                                PlayerTool("サウンド", Icons.Rounded.Equalizer, false, compact, sound)
-                            }
+                            SharedPlayerControls(
+                                vm, playback, track, favorite, compact, outputState.bitPerfectVolumeRestricted,
+                                panel, setPanel, output, sound,
+                            )
                             Spacer(Modifier.height(if (compact) 8.dp else 16.dp))
                         }
                         if (wide) {
@@ -193,7 +157,72 @@ internal fun PlayerScreen(
 }
 
 @Composable
-private fun PlayerGlassButton(
+internal fun artworkPlayerColors(artworkScene: PlayerArtworkScene?): ColorScheme {
+    val palette = artworkScene?.ambient?.palette ?: ArtworkAmbientPalette.Default
+    return remember(palette) {
+        val tint = playerAmbientTone(palette.dominant, palette.accent)
+        darkColorScheme(
+            background = Color(0xFF161319),
+            surface = lerp(Color(0xFF201C23), tint, .32f),
+            surfaceVariant = lerp(Color(0xFF28242D), tint, .38f),
+            onBackground = Color.White,
+            onSurface = Color.White,
+            onSurfaceVariant = Color(0xFFFAF4F8),
+            primary = Color(0xFFF8C5D5)
+        )
+    }
+}
+
+@Composable
+internal fun SharedPlayerControls(
+    vm: LumaViewModel,
+    playback: PlaybackUi,
+    track: Track?,
+    favorite: Boolean,
+    compact: Boolean,
+    bitPerfect: Boolean,
+    panel: String,
+    setPanel: (String) -> Unit,
+    output: () -> Unit,
+    sound: () -> Unit,
+    seekPreview: State<Long?>? = null,
+) {
+    val title = track?.title ?: playback.title
+    val artist = track?.artist ?: playback.artist
+    val playerColors = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            key(playback.mediaId, playback.index) {
+                MarqueeText(title, style = if (compact) MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold) else MaterialTheme.typography.headlineMedium)
+            }
+            if (artist.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                val artistStyle = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium
+                TrackText(artist, style = artistStyle, color = playerColors.onSurfaceVariant)
+            }
+        }
+        PlayerGlassButton(
+            if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+            if (favorite) "お気に入りを解除" else "お気に入りに登録",
+            { track?.let { vm.favorite(it.uri) } },
+            enabled = track != null,
+            active = favorite,
+            tint = if (favorite) playerColors.primary else Color.White,
+        )
+    }
+    SeekControls(vm, compact = true, artworkBackdrop = true, seekPreview = seekPreview)
+    PlaybackButtons(vm, playback, compact = compact)
+    VolumeControl(bitPerfect = bitPerfect)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        PlayerTool("歌詞", Icons.Rounded.Lyrics, panel == "lyrics", compact) { setPanel(if (panel == "lyrics") "player" else "lyrics") }
+        PlayerTool("出力", Icons.Rounded.SpeakerGroup, false, compact, output)
+        PlayerTool("キュー", Icons.AutoMirrored.Rounded.QueueMusic, panel == "queue", compact) { setPanel(if (panel == "queue") "player" else "queue") }
+        PlayerTool("サウンド", Icons.Rounded.Equalizer, false, compact, sound)
+    }
+}
+
+@Composable
+internal fun PlayerGlassButton(
     icon: ImageVector,
     label: String,
     action: () -> Unit,
@@ -239,18 +268,18 @@ private fun PlayerGlassButton(
     }
 }
 
-@Composable fun SeekControls(vm: LumaViewModel, playback: PlaybackUi, compact: Boolean = false, artworkBackdrop: Boolean = false) {
+@Composable internal fun SeekControls(vm: LumaViewModel, compact: Boolean = false, artworkBackdrop: Boolean = false, seekPreview: State<Long?>? = null) {
     val live by vm.playback.state.collectAsStateWithLifecycle()
     var dragged by remember(live.mediaId, live.index) { mutableStateOf<Float?>(null) }
     val duration = live.duration.toFloat().coerceAtLeast(1f)
-    val position = (dragged ?: live.position.toFloat()).coerceIn(0f, duration)
+    val position = (dragged ?: seekPreview?.value?.toFloat() ?: live.position.toFloat()).coerceIn(0f, duration)
     val slider: @Composable () -> Unit = {
         key(live.mediaId, live.index) {
             LumaSlider(
-                position, { dragged = it }, range = 0f..duration, enabled = live.duration > 0,
+                position, { dragged = it }, range = 0f..duration, enabled = live.canSeek && seekPreview?.value == null,
                 trackAlpha = if (artworkBackdrop && live.duration > 0) .48f else .20f,
                 showThumb = artworkBackdrop,
-                onFinished = { dragged?.let { vm.playback.seek(it.toLong()) }; dragged = null }
+                onFinished = { dragged?.let { vm.playback.seek(it.toLong(), live.mediaId, live.index) }; dragged = null }
             )
         }
     }
@@ -339,7 +368,7 @@ private fun PlaybackModeButton(
     }
 }
 
-@Composable private fun LiveLyricsPanel(vm: LumaViewModel, track: Track?, modifier: Modifier) {
+@Composable internal fun LiveLyricsPanel(vm: LumaViewModel, track: Track?, modifier: Modifier) {
     val playback by vm.playback.state.collectAsStateWithLifecycle()
     LyricsPanel(vm, track, playback.position, modifier)
 }
@@ -365,7 +394,7 @@ private fun PlaybackModeButton(
     if (edit) AlertDialog(onDismissRequest = { edit = false }, title = { Text("歌詞 / LRC") }, text = { OutlinedTextField(draft, { draft = it }, Modifier.fillMaxWidth().height(300.dp), placeholder = { Text("[00:12.50]歌詞\nまたは通常のテキスト") }) }, confirmButton = { TextButton({ track?.let { selected -> vm.action { vm.library.saveLyrics(selected.uri, draft) } }; text = draft; edit = false }) { Text("保存") } }, dismissButton = { TextButton({ edit = false }) { Text("キャンセル") } })
 }
 
-@Composable private fun QueuePanel(vm: LumaViewModel, playback: PlaybackUi, modifier: Modifier = Modifier) {
+@Composable internal fun QueuePanel(vm: LumaViewModel, playback: PlaybackUi, modifier: Modifier = Modifier) {
     var editOriginalOrder by rememberSaveable(playback.shuffle) { mutableStateOf(false) }
     val showPlaybackOrder = playback.shuffle && !editOriginalOrder
     val upcoming = playback.upcomingIndices

@@ -38,6 +38,7 @@ data class PlaybackUi(
     val upcomingIndices: List<Int> = emptyList(),
     val canShuffle: Boolean = false,
     val canRepeat: Boolean = false,
+    val canSeek: Boolean = false,
 )
 
 class PlaybackController(context: Context, scope: CoroutineScope) {
@@ -118,6 +119,8 @@ class PlaybackController(context: Context, scope: CoroutineScope) {
             upcomingIndices = upcoming,
             canShuffle = queue.size > 1 && player.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE),
             canRepeat = queue.isNotEmpty() && player.isCommandAvailable(Player.COMMAND_SET_REPEAT_MODE),
+            canSeek = player.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM) &&
+                player.isCurrentMediaItemSeekable && player.duration > 0,
         )
     }
 
@@ -179,8 +182,18 @@ class PlaybackController(context: Context, scope: CoroutineScope) {
     }
 
     fun seek(position: Long) {
-        val player = connectedPlayer() ?: return
-        if (player.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)) player.seekTo(position.coerceAtLeast(0))
+        val current = mutable.value
+        seek(position, current.mediaId, current.index)
+    }
+
+    fun seek(position: Long, expectedMediaId: String?, expectedIndex: Int): Boolean {
+        val player = connectedPlayer() ?: return false
+        if (!player.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM) ||
+            !player.isCurrentMediaItemSeekable || player.duration <= 0 ||
+            player.currentMediaItem?.mediaId != expectedMediaId || player.currentMediaItemIndex != expectedIndex
+        ) return false
+        player.seekTo(position.coerceIn(0, player.duration))
+        return true
     }
 
     fun skip(index: Int, expected: MediaItem? = null): Boolean {

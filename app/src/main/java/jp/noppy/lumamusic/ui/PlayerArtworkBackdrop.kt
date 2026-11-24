@@ -238,6 +238,19 @@ internal fun PlayerArtworkBackdrop(
     alternatePanel: Boolean,
     detailsHeight: () -> Int,
 ) {
+    PlayerArtworkTransition(ready) { scene, modifier ->
+        PlayerArtworkSceneLayer(
+            sheet, scene, title.takeIf { scene === ready }, miniSurface, wide, alternatePanel, detailsHeight,
+            modifier,
+        )
+    }
+}
+
+@Composable
+internal fun PlayerArtworkTransition(
+    ready: PlayerArtworkScene?,
+    layer: @Composable (PlayerArtworkScene, Modifier) -> Unit,
+) {
     val reducedMotion = LocalReducedMotion.current
     val target by rememberUpdatedState(ready)
     var shown by remember { mutableStateOf(ready ?: PlayerArtworkScene.Default) }
@@ -264,15 +277,18 @@ internal fun PlayerArtworkBackdrop(
         }
     }
 
-    val primary = if (reducedMotion) ready ?: shown else shown
-    PlayerArtworkSceneLayer(
-        sheet, primary, title.takeIf { primary === ready }, miniSurface, wide, alternatePanel, detailsHeight, Modifier,
-    )
-    if (!reducedMotion) incoming?.let { next ->
-        PlayerArtworkSceneLayer(
-            sheet, next, title.takeIf { next === ready }, miniSurface, wide, alternatePanel, detailsHeight,
-            Modifier.graphicsLayer { alpha = fade.value },
-        )
+    layer(if (reducedMotion) ready ?: shown else shown, Modifier)
+    if (!reducedMotion) incoming?.let { next -> layer(next, Modifier.graphicsLayer { alpha = fade.value }) }
+}
+
+@Composable
+internal fun StandbyArtworkBackground(ready: PlayerArtworkScene?, base: Color) {
+    PlayerArtworkTransition(ready) { scene, modifier ->
+        Box(Modifier.fillMaxSize().then(modifier).background(base)) {
+            Box(Modifier.fillMaxSize().playerAmbientField(scene, wide = true, dim = true, progress = { 1f }) { _, height ->
+                height * .56f
+            })
+        }
     }
 }
 
@@ -302,32 +318,8 @@ private fun PlayerArtworkSceneLayer(
         return (height - bottomInset - details).coerceAtLeast(0f)
     }
     Box(modifier.fillMaxSize().background(miniSurface)) {
-        Box(Modifier.fillMaxSize().drawWithCache {
-            val field = Brush.verticalGradient(
-                0f to top,
-                .48f to playerAmbientTone(palette.dominant, accent),
-                1f to bottom,
-            )
-            val focus = playerArtworkBounds(size.width, size.height,
-                controlsTop(size.height, safeDrawing.getBottom(this)), overlap.toPx(), wide)
-            val fieldPaint = artworkFieldPaint(scene.ambient, scene.hero, focus, wide)
-            val falloff = Brush.verticalGradient(.74f to Color.Transparent, 1f to Color.Black.copy(alpha = .14f))
-            onDrawBehind {
-                val progress = sheet.progress
-                if (progress > 0f) {
-                    val ambientAlpha = progress * (2f - progress)
-                    if (fieldPaint == null) {
-                        drawRect(field, alpha = ambientAlpha)
-                    } else {
-                        fieldPaint.alpha = (ambientAlpha * 255f).roundToInt()
-                        drawIntoCanvas { canvas ->
-                            canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, fieldPaint)
-                        }
-                    }
-                    drawRect(falloff, alpha = ambientAlpha)
-                    if (alternatePanel) drawRect(Color.Black, alpha = .15f * ambientAlpha)
-                }
-            }
+        Box(Modifier.fillMaxSize().playerAmbientField(scene, wide, alternatePanel, { sheet.progress }) { density, height ->
+            controlsTop(height, safeDrawing.getBottom(density))
         })
         Box(
             Modifier.morphBounds { width, height ->
@@ -400,6 +392,41 @@ private fun PlayerArtworkSceneLayer(
                     tint = Color.White.copy(alpha = if (alternatePanel) .12f else .45f),
                 )
             }
+        }
+    }
+}
+
+private fun Modifier.playerAmbientField(
+    scene: PlayerArtworkScene,
+    wide: Boolean,
+    dim: Boolean,
+    progress: () -> Float,
+    controlsTop: (androidx.compose.ui.unit.Density, Float) -> Float,
+) = drawWithCache {
+    val palette = scene.ambient.palette
+    val accent = palette.accent
+    val field = Brush.verticalGradient(
+        0f to playerAmbientTone(lerp(palette.topLeft, palette.topRight, .5f), accent),
+        .48f to playerAmbientTone(palette.dominant, accent),
+        1f to playerAmbientTone(lerp(palette.bottomLeft, palette.bottomRight, .5f), accent),
+    )
+    val focus = playerArtworkBounds(size.width, size.height, controlsTop(this, size.height), 96.dp.toPx(), wide)
+    val fieldPaint = artworkFieldPaint(scene.ambient, scene.hero, focus, wide)
+    val falloff = Brush.verticalGradient(.74f to Color.Transparent, 1f to Color.Black.copy(alpha = .14f))
+    onDrawBehind {
+        val reveal = progress()
+        if (reveal > 0f) {
+            val alpha = reveal * (2f - reveal)
+            if (fieldPaint == null) {
+                drawRect(field, alpha = alpha)
+            } else {
+                fieldPaint.alpha = (alpha * 255f).roundToInt()
+                drawIntoCanvas { canvas ->
+                    canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, fieldPaint)
+                }
+            }
+            drawRect(falloff, alpha = alpha)
+            if (dim) drawRect(Color.Black, alpha = .15f * alpha)
         }
     }
 }

@@ -1,7 +1,6 @@
 package jp.noppy.lumamusic.ui
 
 import android.media.AudioManager
-import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -36,25 +35,17 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import jp.noppy.lumamusic.data.Preferences
 import jp.noppy.lumamusic.data.Track
 import jp.noppy.lumamusic.playback.PlaybackUi
 import jp.noppy.lumamusic.ui.audio.SoundSettingsScreen
 import jp.noppy.lumamusic.ui.audio.AudioOutputPanel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 import kotlin.math.abs
 
 @Composable fun LumaScreen(vm: LumaViewModel, standby: StandbyController) {
@@ -181,10 +172,9 @@ import kotlin.math.abs
                     showSound -> Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                         SoundSettingsScreen(vm, onOutput = { showOutput = true }) { showSound = false }
                     }
-                    standby.active -> LiquidBackdropHost(
-                        Modifier.fillMaxSize(),
-                        content = { AlbumBackdrop(selected?.artwork ?: playback.artwork, playback.title, reducedMotion, scheme.background) },
-                        overlay = { StandbyScreen(vm, playback, selected, prefs, standby, openSound, output.bitPerfectVolumeRestricted) },
+                    standby.active -> VinylStandbyScreen(
+                        vm, playback, selected, users.any { it.uri == playback.mediaId && it.favorite },
+                        prefs, standby, { showOutput = true }, openSound, output.bitPerfectVolumeRestricted,
                     )
                     showSettings -> Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                         SettingsScreen(vm, prefs, folders, { picker.launch(null) }, { showOutput = true }, openSound, { showSettings = false })
@@ -311,57 +301,6 @@ import kotlin.math.abs
     ) {
         MiniPlayerTracks(display, motion, reduced, compact) { sheet.miniArtworkBounds = it }
     }
-}
-
-@Composable private fun StandbyScreen(vm: LumaViewModel, playback: PlaybackUi, track: Track?, prefs: Preferences, standby: StandbyController, sound: () -> Unit, bitPerfect: Boolean) {
-    val activity = LocalActivity.current ?: return
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var resumed by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
-    var dimmed by remember { mutableStateOf(false) }
-    var minute by remember { mutableStateOf(0) }
-    var time by remember { mutableStateOf(LocalTime.now()) }
-    LaunchedEffect(prefs.dimAfter) { dimmed = false; if (prefs.dimAfter) { delay(30000); dimmed = true } }
-    LaunchedEffect(Unit) { while (true) { time = LocalTime.now(); delay(60000); minute++ } }
-    DisposableEffect(lifecycle) { val observer = LifecycleEventObserver { _, _ -> resumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) }; lifecycle.addObserver(observer); onDispose { lifecycle.removeObserver(observer) } }
-    DisposableEffect(resumed, prefs.keepAwake, prefs.brightness, dimmed) {
-        val window = activity.window
-        val oldBrightness = window.attributes.screenBrightness
-        if (resumed) {
-            if (prefs.keepAwake) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            window.attributes = window.attributes.apply { screenBrightness = if (dimmed) .02f else prefs.brightness }
-        }
-        onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); window.attributes = window.attributes.apply { screenBrightness = oldBrightness } }
-    }
-    Row(Modifier.fillMaxSize().safeDrawingPadding().padding(12.dp).offset(x = (minute % 3 - 1).dp, y = ((minute / 3) % 3 - 1).dp), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) { Artwork(track?.artwork ?: playback.artwork, track?.title ?: playback.title, Modifier.fillMaxHeight(.92f).aspectRatio(1f), 14) }
-        Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.Center) {
-            Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (prefs.clock) Text(time.format(DateTimeFormatter.ofPattern("HH:mm")), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
-                IconButton(sound) { Icon(Icons.Rounded.Equalizer, "サウンド設定") }; IconButton({ dimmed = !dimmed }) { Icon(Icons.Rounded.Brightness4, "明るさ切替") }
-                IconButton(standby::exit) { Icon(Icons.Rounded.Close, "スタンバイを終了") }
-            }
-            TrackText(track?.title ?: playback.title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
-            TrackText(track?.artist ?: playback.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(4.dp))
-            FloatingGlass(Modifier.fillMaxWidth(), 24, PaddingValues(horizontal = 12.dp, vertical = 0.dp)) {
-                SeekControls(vm, playback, compact = true)
-                PlaybackButtons(vm, playback, compact = true)
-                VolumeControl(bitPerfect = bitPerfect)
-            }
-            if (prefs.standbyLyrics) StandbyLyric(vm, track)
-        }
-    }
-    if (prefs.darkStandby || dimmed) Box(Modifier.fillMaxSize().background(Color.Black.copy(if (dimmed) .5f else .12f)))
-}
-
-@Composable private fun StandbyLyric(vm: LumaViewModel, track: Track?) {
-    val live by vm.playback.state.collectAsStateWithLifecycle()
-    val position = live.position
-    var lyrics by remember(track?.uri) { mutableStateOf("") }
-    LaunchedEffect(track?.uri) { if (track != null) lyrics = runCatching { vm.library.lyrics(track) }.getOrDefault("") }
-    val lines = remember(lyrics) { jp.noppy.lumamusic.core.parseLrc(lyrics) }
-    val line = lines.lastOrNull { (it.timeMs ?: Long.MAX_VALUE) <= position } ?: lines.firstOrNull()
-    Text(line?.text.orEmpty(), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable internal fun VolumeControl(bitPerfect: Boolean = false) {

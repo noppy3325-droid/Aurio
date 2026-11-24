@@ -437,10 +437,12 @@ class UiSmokeTest {
             activity = instrumentation.startActivitySync(Intent(context, AurioActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
             click(tracks.first().title, tab = true)
             eventually("expanded Now Playing") { textPresent("プレイヤーを閉じる") }
+            val playerCovers = tracks.map { "アルバムアート: ${it.title}" }.toSet()
             tracks.forEachIndexed { index, track ->
                 main { player.seekTo(index, 2500) }
                 eventually("current artwork for ${track.title}") {
-                    val covers = nodes().mapNotNull { it.contentDescription?.toString() }.filter { it.startsWith("アルバムアート: ") }
+                    // A background home row may expose an album cover to the raw automation tree.
+                    val covers = nodes().mapNotNull { it.contentDescription?.toString() }.filter { it in playerCovers }
                     textPresent(track.title) && if (track.artwork == null) covers.isEmpty()
                     else covers == listOf("アルバムアート: ${track.title}")
                 }
@@ -823,6 +825,19 @@ class UiSmokeTest {
             }
             eventually("standby route") { textPresent("スタンバイを終了") }
             screenshot("14-standby-landscape")
+            val testArguments = InstrumentationRegistry.getArguments()
+            val record = if (testArguments.getString("recordVinyl") == "true") {
+                instrumentation.uiAutomation.executeShellCommand(
+                    "screenrecord --time-limit 14 --size 1200x540 /data/local/tmp/aurio-v130-vinyl.mp4",
+                )
+            } else null
+            try {
+                if (record != null) Thread.sleep(1200)
+                exerciseVinylStandby(activity, player)
+                testArguments.getString("vinylSoakSeconds")?.toLongOrNull()?.let { soakVinylStandby(player, it) }
+            } finally {
+                record?.close()
+            }
             click("スタンバイを終了")
             main { assertNull(player.playerError) }
         } finally {
@@ -855,6 +870,88 @@ class UiSmokeTest {
             // Exact UUID-owned private directory; never touch registered music folders.
             assertTrue(directory.name == "ui-fixture-$fixtureId" && directory.parentFile == context.filesDir)
             directory.deleteRecursively()
+        }
+    }
+
+    private fun exerciseVinylStandby(activity: Activity, player: MediaController) {
+        fun position(): Long {
+            var result = 0L
+            main { result = player.currentPosition }
+            return result
+        }
+        val view = activity.window.decorView
+        val disc = checkNotNull(nodes().firstOrNull { it.contentDescription?.toString() == "レコード盤" })
+        val rect = android.graphics.Rect().also(disc::getBoundsInScreen)
+        val origin = IntArray(2).also(view::getLocationOnScreen)
+        fun point(x: Float, y: Float) = Pair(
+            (rect.left - origin[0] + x * rect.width()) / view.width,
+            (rect.top - origin[1] + y * rect.height()) / view.height,
+        )
+        fun drag(from: Pair<Float, Float>, to: Pair<Float, Float>, cancel: Boolean = false, inspect: (() -> Unit)? = null) {
+            swipe(activity, from.first, from.second, to.first, to.second, 350, cancel = cancel, inspect = inspect)
+        }
+        main { player.pause(); player.seekTo(5_000) }
+        eventually("standby fixture is positioned") { position() in 4_950..5_050 }
+        Thread.sleep(450)
+        val before = position()
+        val rimStart = point(.10f, .54f)
+        val rimEnd = point(.28f, .16f)
+        drag(rimStart, rimEnd) { assertEquals("Drag previews without seeking", before, position()) }
+        eventually("clockwise turn advances playback") { position() in (before + 1_400)..(before + 2_200) }
+        drag(rimEnd, rimStart)
+        eventually("counterclockwise turn returns to the original position") { position() in (before - 100)..(before + 100) }
+        drag(rimStart, rimEnd, cancel = true)
+        assertTrue("Cancelling the turn leaves the position unchanged", position() in (before - 100)..(before + 100))
+        val armStart = point(1.01f, .21f)
+        val armEnd = point(.69f, .49f)
+        drag(armStart, armEnd)
+        eventually("tonearm drag sets an absolute playback position") { position() in 13_500..18_500 }
+        screenshot("v130-vinyl-seek")
+        val middle = point(.5f, .5f)
+        val touchTime = SystemClock.uptimeMillis()
+        main {
+            for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                val event = MotionEvent.obtain(touchTime, SystemClock.uptimeMillis(), action, middle.first * view.width, middle.second * view.height, 0)
+                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                try { activity.dispatchTouchEvent(event) } finally { event.recycle() }
+            }
+        }
+        fun isPlaying(): Boolean {
+            var result = false
+            main { result = player.isPlaying }
+            return result
+        }
+        eventually("disc tap toggles playback", condition = ::isPlaying)
+        click("レコード盤")
+        eventually("accessible disc action pauses playback") { !isPlaying() }
+        click("レコード盤")
+        eventually("accessible disc action resumes playback", condition = ::isPlaying)
+    }
+
+    private fun soakVinylStandby(player: MediaController, seconds: Long) {
+        val start = SystemClock.elapsedRealtime()
+        var nextSample = 0L
+        var previous = -1L
+        main { player.repeatMode = Player.REPEAT_MODE_ONE }
+        while (SystemClock.elapsedRealtime() < start + seconds * 1000) {
+            Thread.sleep(2000)
+            main {
+                assertTrue("Playback stays active during standby", player.isPlaying)
+                assertNull(player.playerError)
+                val position = player.currentPosition
+                val duration = player.duration
+                if (previous >= 0 && duration > 0) {
+                    val advance = (position - previous + duration) % duration
+                    assertTrue("Standby playback keeps advancing (advance=$advance)", advance in 150..12_000)
+                }
+                previous = position
+            }
+            val elapsed = SystemClock.elapsedRealtime() - start
+            if (elapsed >= nextSample) {
+                val memory = android.os.Debug.MemoryInfo().apply { android.os.Debug.getMemoryInfo(this) }
+                android.util.Log.i("AurioVinylSoak", "elapsedMs=$elapsed pssKb=${memory.totalPss}")
+                nextSample += 60_000
+            }
         }
     }
 }
