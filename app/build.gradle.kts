@@ -6,8 +6,8 @@ android {
         applicationId = "jp.noppy.lumamusic"
         minSdk = 29
         targetSdk = 37
-        versionCode = 32
-        versionName = "1.3.0"
+        versionCode = 33
+        versionName = "1.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true }
@@ -28,8 +28,10 @@ dependencies {
     implementation("io.github.kyant0:backdrop:2.0.1")
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
     debugImplementation("androidx.compose.ui:ui-tooling")
-    implementation("androidx.media3:media3-exoplayer:1.11.1")
-    implementation("androidx.media3:media3-session:1.11.1")
+    // Includes the fix for double-trimmed LAME/Xing MP3 with platform decoders.
+    val media3Version = "1.12.0-rc01"
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-session:$media3Version")
     implementation("androidx.documentfile:documentfile:1.1.0")
     implementation("androidx.room:room-runtime:2.8.5")
     implementation("androidx.room:room-ktx:2.8.5")

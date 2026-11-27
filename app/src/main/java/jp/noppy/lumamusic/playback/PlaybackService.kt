@@ -41,12 +41,14 @@ import kotlin.random.Random
 class PlaybackService : MediaSessionService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var player: ExoPlayer
+    private lateinit var transport: SessionQueuePlayer
     private lateinit var shuffle: PlaybackShuffle
     private var session: MediaSession? = null
     private val app get() = application as LumaApp
     private var restored = false
     private var retryUsed = false
     private val disconnecting = AtomicBoolean(false)
+    private var skipResumeBlocked = false
     private val dsp = LumaAudioProcessor()
     private val analysis by lazy { AnalysisRepository(this, app.library.dao) }
     private var analysisJob: Job? = null
@@ -104,7 +106,8 @@ class PlaybackService : MediaSessionService() {
         // Remain conservative before asynchronous preferences arrive.
         app.output.processingIsUnchanged(false)
         val activity = PendingIntent.getActivity(this, 0, Intent(this, AurioActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        session = MediaSession.Builder(this, SessionQueuePlayer(player, shuffle::beforePlay))
+        transport = SessionQueuePlayer(player, shuffle::beforePlay) { !skipResumeBlocked && !disconnecting.get() }
+        session = MediaSession.Builder(this, transport)
             .setSessionActivity(activity)
             .setCallback(SessionCallbacks())
             .build()
@@ -166,7 +169,14 @@ class PlaybackService : MediaSessionService() {
             override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) = updateProcessing()
             override fun onSkipSilenceEnabledChanged(skipSilenceEnabled: Boolean) = updateProcessing()
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                if (playWhenReady) disconnecting.set(false)
+                if (playWhenReady) {
+                    disconnecting.set(false)
+                    skipResumeBlocked = false
+                } else if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS ||
+                    reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY
+                ) {
+                    skipResumeBlocked = true
+                }
             }
             override fun onPlayerError(error: PlaybackException) {
                 val wasMixer = app.output.state.value.mixerApplied
@@ -236,7 +246,8 @@ class PlaybackService : MediaSessionService() {
 
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             if (!isOwnController(controller)) return super.onConnect(session, controller)
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(addQueueItemCommand).build()
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                .add(addQueueItemCommand).add(anchoredSkipCommand).build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
                 .setAvailableSessionCommands(commands)
                 .build()
@@ -248,10 +259,16 @@ class PlaybackService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction != addQueueItemCommand.customAction) {
+            val action = customCommand.customAction
+            if (action != addQueueItemCommand.customAction && action != anchoredSkipCommand.customAction) {
                 return super.onCustomCommand(session, controller, customCommand, args)
             }
             if (!isOwnController(controller)) return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+            if (action == anchoredSkipCommand.customAction) {
+                val anchor = SkipAnchor.read(args)
+                val moved = anchor != null && transport.navigate(args.getBoolean("forward"), anchor)
+                return Futures.immediateFuture(SessionResult(if (moved) SessionResult.RESULT_SUCCESS else SessionError.ERROR_BAD_VALUE))
+            }
             val uri = args.getString(QUEUE_ITEM_URI)
                 ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
             val playNext = args.getBoolean(QUEUE_PLAY_NEXT)
@@ -402,7 +419,11 @@ class PlaybackService : MediaSessionService() {
 
 /** Translate generic notification and headset skip commands to explicit media-item navigation. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-private class SessionQueuePlayer(private val engine: Player, private val beforePlay: () -> Unit) : ForwardingPlayer(engine) {
+private class SessionQueuePlayer(
+    private val engine: Player,
+    private val beforePlay: () -> Unit,
+    private val allowSkipResume: () -> Boolean,
+) : ForwardingPlayer(engine) {
     override fun seekToPrevious() = seekToPreviousMediaItem()
     override fun seekToNext() = seekToNextMediaItem()
 
@@ -417,11 +438,25 @@ private class SessionQueuePlayer(private val engine: Player, private val beforeP
     }
 
     override fun seekToPreviousMediaItem() {
-        if (engine.neighborIndex(forward = false) != null) engine.seekToPreviousMediaItem()
+        navigate(forward = false)
     }
 
     override fun seekToNextMediaItem() {
-        if (engine.neighborIndex(forward = true) != null) engine.seekToNextMediaItem()
+        navigate(forward = true)
+    }
+
+    fun navigate(forward: Boolean, anchor: SkipAnchor? = null): Boolean {
+        val target = engine.neighborIndex(forward) ?: return false
+        if (anchor != null && (engine.currentMediaItemIndex != anchor.from ||
+            engine.currentMediaItem?.mediaId != anchor.fromId || target != anchor.to ||
+            engine.getMediaItemAt(target).mediaId != anchor.toId)
+        ) return false
+        val mayResume = !engine.playWhenReady && engine.playbackState != Player.STATE_IDLE &&
+            engine.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
+            engine.isCommandAvailable(Player.COMMAND_PLAY_PAUSE)
+        if (forward) engine.seekToNextMediaItem() else engine.seekToPreviousMediaItem()
+        if (mayResume && allowSkipResume()) engine.play()
+        return true
     }
 }
 

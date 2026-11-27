@@ -3,6 +3,7 @@ package jp.noppy.lumamusic.playback
 import android.content.ComponentName
 import android.content.Context
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 data class PlaybackUi(
     val connected: Boolean = false,
@@ -47,6 +49,7 @@ class PlaybackController(context: Context, scope: CoroutineScope) {
     private val mainExecutor = ContextCompat.getMainExecutor(context)
     private var controller: MediaController? = null
     private var closed = false
+    private var lastQuickShuffleAt: Long? = null
     private val future = MediaController.Builder(context, SessionToken(context, ComponentName(context, PlaybackService::class.java))).buildAsync()
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -145,6 +148,18 @@ class PlaybackController(context: Context, scope: CoroutineScope) {
         return true
     }
 
+    internal fun quickShuffle(tracks: List<Track>, random: Random = Random.Default): Boolean {
+        if (tracks.isEmpty()) return false
+        val player = connectedPlayer() ?: return false
+        if (tracks.size > 1 && !player.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE)) return false
+        val now = SystemClock.elapsedRealtime()
+        // Multiple taps before the player opens should not replace the new queue again.
+        if (lastQuickShuffleAt?.let { now - it < 350L } == true) return true
+        if (!play(tracks, random.nextInt(tracks.size), shuffle = tracks.size > 1)) return false
+        lastQuickShuffleAt = now
+        return true
+    }
+
     fun toggle() {
         val player = connectedPlayer() ?: return
         if (!player.isCommandAvailable(Player.COMMAND_PLAY_PAUSE)) return
@@ -169,15 +184,15 @@ class PlaybackController(context: Context, scope: CoroutineScope) {
         val target = player.neighborIndex(forward) ?: return false
         if (expected != null) {
             val expectedIndex = if (forward) expected.nextIndex else expected.previousIndex
-            val expectedItem = if (forward) expected.nextItem else expected.previousItem
+            val expectedItem = (if (forward) expected.nextItem else expected.previousItem) ?: return false
             if (player.currentMediaItemIndex != expected.index || player.currentMediaItem?.mediaId != expected.mediaId ||
                 target != expectedIndex || expectedItem != player.getMediaItemAt(target)) return false
-            // The previewed destination is fixed. If playback advances while the command is in
-            // transit, a relative command could jump one additional song.
-            return skip(target, expectedItem)
+            if (!player.availableSessionCommands.contains(anchoredSkipCommand)) return false
+            val anchor = SkipAnchor(expected.index, expected.mediaId ?: return false, target, expectedItem.mediaId)
+            player.sendCustomCommand(anchoredSkipCommand, anchor.arguments(forward))
+            return true
         }
         if (forward) player.seekToNextMediaItem() else player.seekToPreviousMediaItem()
-        prepareIfIdle(player)
         return true
     }
 

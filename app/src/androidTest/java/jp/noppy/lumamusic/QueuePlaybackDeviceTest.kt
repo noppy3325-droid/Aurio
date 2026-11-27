@@ -2,6 +2,9 @@ package jp.noppy.lumamusic
 
 import android.content.ComponentName
 import android.net.Uri
+import android.os.SystemClock
+import android.util.Log
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -29,6 +32,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.random.Random
 
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -133,16 +137,18 @@ class QueuePlaybackDeviceTest {
             await("Repeat ALL cycles to ONE") { ui.state.value.repeat == Player.REPEAT_MODE_ONE && observer.repeatMode == Player.REPEAT_MODE_ONE }
             val gesture = ui.state.value
             main { assertTrue(ui.next(gesture)) }
-            await("Explicit Next skips under Repeat ONE and stays paused") {
-                observer.currentMediaItem?.mediaId == tracks[3].uri && ui.state.value.mediaId == tracks[3].uri && !observer.playWhenReady
+            await("A paused swipe starts the next shuffled item under Repeat ONE") {
+                observer.currentMediaItem?.mediaId == tracks[3].uri && ui.state.value.mediaId == tracks[3].uri &&
+                    observer.isPlaying && observer.currentPosition < 2000
             }
             main {
                 assertFalse("An outdated swipe cannot skip again", ui.next(gesture))
+                observer.pause()
                 observer.seekTo(4500)
                 observer.seekToPrevious() // Generic session command used by some external transports.
             }
-            await("Previous returns to the actual shuffled predecessor even after several seconds") {
-                observer.currentMediaItem?.mediaId == tracks[1].uri && observer.currentPosition < 1000
+            await("A paused external Previous plays the actual shuffled predecessor from its beginning") {
+                observer.currentMediaItem?.mediaId == tracks[1].uri && observer.isPlaying && observer.currentPosition < 2000
             }
 
             val repeatTransitions = AtomicInteger()
@@ -183,7 +189,10 @@ class QueuePlaybackDeviceTest {
                 ui.state.value.mediaId == completedTail && ui.state.value.nextIndex == null
             }
             main {
+                observer.pause()
                 assertFalse(ui.next())
+                observer.seekToNext()
+                assertFalse("A boundary skip must not resume", observer.playWhenReady)
                 observer.seekTo(5750)
                 observer.play()
             }
@@ -244,14 +253,114 @@ class QueuePlaybackDeviceTest {
         }
     }
 
-    private fun fixtures(): List<File> {
-        val frames = 48_000 * 6
+    @Test fun quickShufflePlaysAllTenEntriesAndReplacesALargeQueueOnlyOnce() {
+        val shortFiles = fixtures(count = 10, durationMs = 600)
+        val longFile = fixtures(count = 1).single()
+        val tracks = shortFiles.map { Track(Uri.fromFile(it).toString(), "Shared title") }
+        val large = List(1000) { index ->
+            Track(Uri.fromFile(longFile).buildUpon().fragment(index.toString()).build().toString(), "Shared title")
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        lateinit var ui: PlaybackController
+        lateinit var future: ListenableFuture<MediaController>
+        main {
+            ui = PlaybackController(context, scope)
+            future = MediaController.Builder(context, SessionToken(context, ComponentName(context, PlaybackService::class.java))).buildAsync()
+        }
+        val observer = future.get(15, TimeUnit.SECONDS)
+        var originalQueue = emptyList<MediaItem>()
+        var originalIndex = 0
+        var originalPosition = 0L
+        var originalPlaying = false
+        var originalRepeat = Player.REPEAT_MODE_OFF
+        var originalShuffle = false
+        val played = mutableListOf<String>()
+        val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                mediaItem?.mediaId?.let(played::add)
+            }
+        }
+        try {
+            await("Quick Shuffle is connected") { ui.state.value.connected }
+            val firstSeed = 17
+            val first = tracks[Random(firstSeed).nextInt(tracks.size)].uri
+            main {
+                originalQueue = List(observer.mediaItemCount, observer::getMediaItemAt)
+                originalIndex = observer.currentMediaItemIndex
+                originalPosition = observer.currentPosition
+                originalPlaying = observer.playWhenReady
+                originalRepeat = observer.repeatMode
+                originalShuffle = observer.shuffleModeEnabled
+                observer.pause()
+                observer.repeatMode = Player.REPEAT_MODE_OFF
+                observer.addListener(listener)
+                assertFalse(ui.quickShuffle(emptyList()))
+                assertEquals(originalQueue.size, observer.mediaItemCount)
+                assertTrue(ui.quickShuffle(tracks, Random(firstSeed)))
+            }
+            await("All ten tracks finish with Repeat Off") {
+                observer.playbackState == Player.STATE_ENDED && observer.mediaItemCount == tracks.size
+            }
+            main {
+                val round = played.filter { id -> tracks.any { it.uri == id } }
+                assertEquals(first, round.first())
+                assertEquals(tracks.size, round.size)
+                assertEquals(tracks.map(Track::uri).toSet(), round.toSet())
+                assertEquals(tracks.map(Track::uri), List(observer.mediaItemCount) { observer.getMediaItemAt(it).mediaId })
+                observer.removeListener(listener)
+                assertTrue(ui.quickShuffle(listOf(large.first())))
+            }
+            await("One entry plays on its own") {
+                observer.isPlaying && observer.mediaItemCount == 1 && observer.currentMediaItem?.mediaId == large.first().uri
+            }
+            Thread.sleep(400)
+            val largeSeed = 41
+            val selected = Random(largeSeed).nextInt(large.size)
+            val started = SystemClock.elapsedRealtime()
+            main {
+                assertTrue(ui.quickShuffle(large, Random(largeSeed)))
+                assertTrue(ui.quickShuffle(large, Random(largeSeed + 1)))
+            }
+            await("The first 1000-entry request wins even with a second immediate tap") {
+                observer.isPlaying && observer.shuffleModeEnabled && observer.mediaItemCount == 1000 &&
+                    observer.currentMediaItemIndex == selected && ui.state.value.upcomingIndices.size == 999
+            }
+            Log.i("AurioShuffleQA", "items=1000 first=$selected elapsedMs=${SystemClock.elapsedRealtime() - started}")
+            main {
+                assertEquals(large.map(Track::uri), List(observer.mediaItemCount) { observer.getMediaItemAt(it).mediaId })
+                ui.shuffle()
+            }
+            await("Disabling shuffle keeps all 1000 entries and the current song") {
+                !observer.shuffleModeEnabled && observer.currentMediaItemIndex == selected && observer.mediaItemCount == 1000
+            }
+        } finally {
+            main {
+                observer.removeListener(listener)
+                observer.pause()
+                if (originalQueue.isEmpty()) observer.clearMediaItems()
+                else {
+                    observer.setMediaItems(originalQueue, originalIndex, originalPosition)
+                    observer.prepare()
+                    observer.playWhenReady = originalPlaying
+                }
+                observer.repeatMode = originalRepeat
+                observer.shuffleModeEnabled = originalShuffle
+                ui.close()
+                MediaController.releaseFuture(future)
+            }
+            scope.cancel()
+            (shortFiles + longFile).forEach(File::delete)
+        }
+    }
+
+    private fun fixtures(count: Int = 5, durationMs: Int = 6000): List<File> {
+        val frames = 48 * durationMs
         val dataSize = frames * 2
         val wave = ByteBuffer.allocate(44 + dataSize).order(ByteOrder.LITTLE_ENDIAN)
         wave.put("RIFF".toByteArray()).putInt(36 + dataSize).put("WAVEfmt ".toByteArray()).putInt(16)
             .putShort(1).putShort(1).putInt(48_000).putInt(96_000).putShort(2).putShort(16)
             .put("data".toByteArray()).putInt(dataSize)
         val unique = UUID.randomUUID().toString()
-        return List(5) { index -> File(context.cacheDir, "queue-$unique-$index.wav").apply { writeBytes(wave.array()) } }
+        return List(count) { index -> File(context.cacheDir, "queue-$unique-$index.wav").apply { writeBytes(wave.array()) } }
     }
 }

@@ -162,6 +162,7 @@ class OutputMonitor(context: Context) {
     fun processingIsUnchanged(value: Boolean) {
         if (unprocessed == value) return
         unprocessed = value
+        if (engine.mode != OutputMode.BIT_PERFECT) return
         clearMixer()
         configure(mutable.value.track, track?.format?.channelMask ?: 0)
     }
@@ -276,7 +277,9 @@ class OutputMonitor(context: Context) {
     fun newSource() {
         optimizationFailed = false
         source = null
-        clearMixer()
+        // Format matching follows the PCM AudioTrack. Dropping its mixer while the
+        // next song is already feeding the same track can interrupt that output.
+        if (engine.mode == OutputMode.BIT_PERFECT) clearMixer()
     }
 
     @Synchronized

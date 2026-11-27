@@ -11,6 +11,28 @@ internal const val QUEUE_PLAY_NEXT = "playNext"
 internal val addQueueItemCommand by lazy {
     SessionCommand("jp.noppy.lumamusic.QUEUE_ADD", Bundle.EMPTY)
 }
+internal val anchoredSkipCommand by lazy {
+    SessionCommand("jp.noppy.lumamusic.QUEUE_SKIP", Bundle.EMPTY)
+}
+
+/** A swipe previews a particular destination. An automatic transition can invalidate it. */
+internal data class SkipAnchor(val from: Int, val fromId: String, val to: Int, val toId: String) {
+    fun arguments(forward: Boolean) = Bundle().apply {
+        putBoolean("forward", forward)
+        putInt("from", from)
+        putString("fromId", fromId)
+        putInt("to", to)
+        putString("toId", toId)
+    }
+
+    companion object {
+        fun read(args: Bundle): SkipAnchor? {
+            val fromId = args.getString("fromId") ?: return null
+            val toId = args.getString("toId") ?: return null
+            return SkipAnchor(args.getInt("from", -1), fromId, args.getInt("to", -1), toId)
+        }
+    }
+}
 
 internal fun nextRepeatMode(mode: Int): Int = when (mode) {
     Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL

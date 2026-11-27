@@ -1,0 +1,65 @@
+Aurio v1.4.0 / Android API 37 / PCM at the app output boundary
+
+[Published v1.3.0: WAV baseline]
+rate=44100 mode=DIRECT transitions=20 frames=277830 firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+rate=48000 mode=DIRECT transitions=20 frames=302400 firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+rate=48000 mode=ENHANCE transitions=20 frames=302400 firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+[v1.4.0 with Media3 1.11.1: MP3 regression reproduced]
+format=mp3 start=QUEUE refFrames=14400 frames=58223 refTone=2..2398 decodedTones=[1..1869, 14401..16269, 28801..30669, 43201..45069]
+
+[v1.4.0 final: post-DSP PCM and Quick Shuffle]
+format=flac rate=48000 mode=DIRECT start=QUEUE transitions=20 frames=302400 maxHeadError=0.0 starts=[] firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+format=mp3 start=QUEUE refFrames=14400 frames=57600 refTone=2..2398 decodedTones=[2..2398, 14402..16798, 28802..31198, 43202..45598]
+format=mp3 rate=48000 mode=DIRECT start=QUEUE transitions=3 frames=57600 maxHeadError=0.075 starts=[2, 14402, 28802, 43202] firstPositions=[0, 0, 0]
+format=mp3 start=MANUAL_SKIP refFrames=14400 frames=28800 refTone=2..2398 decodedTones=[2..2398, 14402..16798]
+format=mp3 rate=48000 mode=DIRECT start=MANUAL_SKIP transitions=1 frames=28800 maxHeadError=0.075 starts=[2, 14402] firstPositions=[0]
+format=mp3 start=REPEAT_ONE refFrames=14400 frames=55296 refTone=2..2398 decodedTones=[2..2398, 14402..16798, 28802..31198]
+format=mp3 rate=48000 mode=DIRECT start=REPEAT_ONE transitions=1 frames=55296 maxHeadError=0.075 starts=[2, 14402] firstPositions=[0]
+format=m4a start=QUEUE refFrames=14400 frames=57600 refTone=1..2399 decodedTones=[1..2399, 14401..16799, 28801..31199, 43201..45599]
+format=m4a rate=48000 mode=DIRECT start=QUEUE transitions=3 frames=57600 maxHeadError=2.277083333333333 starts=[1, 14401, 28801, 43201] firstPositions=[0, 0, 0]
+format=m4a start=MANUAL_SKIP refFrames=14400 frames=28800 refTone=1..2399 decodedTones=[1..2399, 14401..16799]
+format=m4a rate=48000 mode=DIRECT start=MANUAL_SKIP transitions=1 frames=28800 maxHeadError=2.277083333333333 starts=[1, 14401] firstPositions=[0]
+format=m4a start=REPEAT_ONE refFrames=14400 frames=56640 refTone=1..2399 decodedTones=[1..2399, 14401..16799, 28801..31199, 43201..44639]
+format=m4a rate=48000 mode=DIRECT start=REPEAT_ONE transitions=1 frames=56640 maxHeadError=2.277083333333333 starts=[1, 14401] firstPositions=[0]
+format=wav rate=48000 mode=DIRECT start=SHUFFLED transitions=9 frames=144000 maxHeadError=0.0 starts=[] firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0]
+format=flac rate=48000 mode=DIRECT start=SHUFFLED transitions=9 frames=144000 maxHeadError=0.0 starts=[] firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0]
+format=mp3 start=SHUFFLED refFrames=14400 frames=144000 refTone=2..2398 decodedTones=[2..2398, 14402..16798, 28802..31198, 43202..45598, 57602..59998, 72002..74398, 86402..88798, 100802..103198, 115202..117598, 129602..131998]
+format=mp3 rate=48000 mode=DIRECT start=SHUFFLED transitions=9 frames=144000 maxHeadError=0.075 starts=[2, 14402, 28802, 43202, 57602, 72002, 86402, 100802, 115202, 129602] firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0]
+format=m4a start=SHUFFLED refFrames=14400 frames=144000 refTone=1..2399 decodedTones=[1..2399, 14401..16799, 28801..31199, 43201..45599, 57601..59999, 72001..74399, 86401..88799, 100801..103199, 115201..117599, 129601..131999]
+format=m4a rate=48000 mode=DIRECT start=SHUFFLED transitions=9 frames=144000 maxHeadError=2.277083333333333 starts=[1, 14401, 28801, 43201, 57601, 72001, 86401, 100801, 115201, 129601] firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0]
+format=wav rate=48000 mode=ENHANCE start=SHUFFLED transitions=9 frames=144000 maxHeadError=0.0 starts=[] firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0]
+format=wav rate=44100 mode=DIRECT start=QUEUE transitions=20 frames=277830 maxHeadError=0.0 starts=[] firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+format=wav rate=48000 mode=DIRECT start=QUEUE transitions=20 frames=302400 maxHeadError=0.0 starts=[] firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+format=wav rate=48000 mode=ENHANCE start=QUEUE transitions=20 frames=302400 maxHeadError=0.0 starts=[] firstPositions=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+items=1000 first=873 elapsedMs=649
+
+[v1.4.0 final: scan]
+run=0 count=200 firstMs=34 totalMs=3414 queries=1 opens=200
+run=1 count=200 firstMs=11 totalMs=51 queries=1 opens=0
+
+[v1.4.0 final: queue restore]
+before=星をつなぐ 17 | 星をつなぐ 12 | 星をつなぐ 23 | 星をつなぐ 39 | 星をつなぐ 29 | 星をつなぐ 38 | 星をつなぐ 17
+after=星をつなぐ 17 | 星をつなぐ 12 | 星をつなぐ 23 | 星をつなぐ 39 | 星をつなぐ 29 | 星をつなぐ 38 | 星をつなぐ 17
+restoredPaused=True
+queueUnchanged=True
+
+[Cold start: TotalTime in ms]
+version=1.3.0 trial=1
+TotalTime: 2048
+version=1.3.0 trial=2
+TotalTime: 1308
+version=1.3.0 trial=3
+TotalTime: 1301
+version=1.4.0 trial=1
+TotalTime: 2093
+version=1.4.0 trial=2
+TotalTime: 1958
+version=1.4.0 trial=3
+TotalTime: 1418
+version=1.4.0 final trial=1
+TotalTime: 2367
+version=1.4.0 final trial=2
+TotalTime: 1839
+version=1.4.0 final trial=3
+TotalTime: 2020

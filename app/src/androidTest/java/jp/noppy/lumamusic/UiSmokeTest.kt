@@ -566,6 +566,29 @@ class UiSmokeTest {
                 textPresent(top.title)
             }
             screenshot("01-library-light")
+            val fullLibrary = app.library.tracks.first().map(Track::uri).toSet()
+            click("全曲シャッフル")
+            eventually("Library Quick Shuffle starts the displayed song collection") {
+                var active = false
+                main {
+                    active = player.isPlaying && player.shuffleModeEnabled &&
+                        List(player.mediaItemCount) { player.getMediaItemAt(it).mediaId }.toSet() == fullLibrary
+                }
+                active && textPresent("プレイヤーを閉じる")
+            }
+            screenshot("v140-library-quick-playing")
+            click("プレイヤーを閉じる")
+            main {
+                player.shuffleModeEnabled = false
+                player.setMediaItems(fixtureQueue, fixtureQueue.lastIndex, 0)
+                player.prepare()
+                player.play()
+            }
+            eventually("Original queue is ready for the navigation checks") {
+                var playingFixture = false
+                main { playingFixture = player.isPlaying && player.currentMediaItem?.mediaId == top.uri }
+                playingFixture
+            }
             val density = context.resources.displayMetrics
             if (density.widthPixels / density.density >= 368f && context.resources.configuration.fontScale <= 1.3f) {
                 fun dockBounds(label: String) = nodes().filter {

@@ -231,6 +231,17 @@ internal fun LibraryScreen(
             ChoiceChips(categories.map(LibraryCategory::label), category.label) { label ->
                 category = categories.first { it.label == label }
             }
+            if (category == LibraryCategory.Songs) {
+                FilledTonalButton(
+                    onClick = { vm.quickShuffle(visible, openPlayer) },
+                    modifier = Modifier.padding(start = LumaSpacing.Page, top = 4.dp),
+                    enabled = playback.connected && visible.isNotEmpty(),
+                ) {
+                    Icon(Icons.Rounded.Shuffle, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("全曲シャッフル")
+                }
+            }
         }
         if (scan.running && initialDetail == null) {
             Row(Modifier.padding(horizontal = LumaSpacing.Page, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {

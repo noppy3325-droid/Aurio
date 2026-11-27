@@ -142,6 +142,10 @@ class LumaViewModel(application: Application) : AndroidViewModel(application) {
         if (playback.play(tracks, shuffle = shuffle)) openPlayer()
         else feedbackEvents.trySend("再生できません。接続後にもう一度お試しください")
     }
+    fun quickShuffle(tracks: List<Track>, openPlayer: () -> Unit) {
+        if (playback.quickShuffle(tracks)) openPlayer()
+        else feedbackEvents.trySend("再生できません。接続後にもう一度お試しください")
+    }
     fun enqueue(track: Track, next: Boolean) {
         playback.enqueue(track, next) { added ->
             feedbackEvents.trySend(when {
