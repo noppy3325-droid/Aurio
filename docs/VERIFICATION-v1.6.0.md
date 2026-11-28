@@ -80,4 +80,4 @@ Media3のAudioSink内でAurioの処理直後のPCMを取得しました。24 bit
 ## 今回の配布
 
 - APKは `release/Aurio-1.6.0.apk`、配布情報は `release/v1.6.0/update.json` です。69,868,467バイト、SHA-256は `a5dc564e0991afd72c31a82ad6dfc1fa442f51878805c00c8fb381565006a6fd` です。
-- 実機での出力切替とUSB-C／Bluetoothの品質測定を残しているため評価版です。アプリ内更新と共通QAの前回の結果は [v1.5.0の検証記録](VERIFICATION-v1.5.0.md) にあります。
+- 実機での出力切替とUSB-C／Bluetoothの品質測定は未実施です。アプリ内更新と共通QAの前回の結果は [v1.5.0の検証記録](VERIFICATION-v1.5.0.md) にあります。
