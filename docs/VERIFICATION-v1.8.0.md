@@ -8,7 +8,7 @@
 
 ## 実装
 
-- v1.7.0の途中変更をローカルGitに退避し、公開済みのv1.6.0から作業しました。横置きスタンバイの左に盤と針を表示し、右に再生画面と共通の操作を置きます。狭い横画面では操作側の幅を優先します。
+- 公開済みのv1.6.0をベースに横置きスタンバイを更新しました。左に盤と針を表示し、右に再生画面と共通の操作を置きます。狭い横画面では操作側の幅を優先します。
 - 盤とジャケットは再生中に1.8秒で1回転します。一時停止中の角度を保持し、針は盤外へ戻ります。盤は短いタップで再生・一時停止を切り替えます。再生位置の操作は共通のシークバーで行います。
 - 盤の交換は525 msです。旧盤を左へ送り、新しい盤を右から入れます。再生中はその後125 msで針が戻ります。曲送りが続いた場合は最新の盤を使います。動きを軽減する設定では盤を即時に切り替えます。
 - 初期状態では端末の明るさに従い、自動減光はオフです。旧版で保存した明るさ・自動減光を読み込み、前面から離れるか画面を閉じた時点でウィンドウの明るさと点灯フラグを復元します。 [WindowManager.LayoutParams](https://developer.android.com/reference/android/view/WindowManager.LayoutParams#screenBrightness) · [LifecycleEventObserver](https://developer.android.com/reference/androidx/lifecycle/LifecycleEventObserver)
@@ -42,8 +42,8 @@
 - [曲送り後の盤と背景](screenshots/v180/next-record.png) · [縦画面へ復帰](screenshots/v180/portrait.png)
 - [狭い横画面と文字サイズ1.3倍](screenshots/v180/narrow.png)
 
-エミュレーターで撮影した約17秒の録画は `release/checks/Aurio-1.8.0-vinyl.mp4` にあります。
+エミュレーターで撮影した録画は約17秒です。 [動作録画](https://github.com/noppy3325-droid/Aurio/releases/download/v1.8.0/Aurio-1.8.0-vinyl.mp4)
 
 ## APK
 
-`release/Aurio-1.8.0.apk` と `release/v1.8.0/update.json` を同じ署名・バージョンで照合しました。APKは69,868,467バイト、SHA-256は `79cdf8a20c1806beb8229b533336703f2a450429ba616bc1e5dd54f9bf512f6d` です。今回はローカルの評価用です。
+`release/Aurio-1.8.0.apk` と `release/v1.8.0/update.json` を同じ署名・バージョンで照合しました。APKは69,868,467バイト、SHA-256は `79cdf8a20c1806beb8229b533336703f2a450429ba616bc1e5dd54f9bf512f6d` です。 [GitHubリリース](https://github.com/noppy3325-droid/Aurio/releases/tag/v1.8.0)

@@ -6,7 +6,7 @@
 
 Aurioは端末に保存した曲を聴くためのAndroid向け音楽プレイヤーです。曲を整理し、再生記録を振り返りながら、10バンドEQとフィルターで音を調整できます。
 
-[v1.6.0 APKをダウンロード](https://github.com/noppy3325-droid/Aurio/releases/download/v1.6.0/Aurio-1.6.0.apk) · [リリース一覧](https://github.com/noppy3325-droid/Aurio/releases) · [使い始める](#使い始める)
+[v1.8.0 APKをダウンロード](https://github.com/noppy3325-droid/Aurio/releases/download/v1.8.0/Aurio-1.8.0.apk) · [リリース一覧](https://github.com/noppy3325-droid/Aurio/releases) · [使い始める](#使い始める)
 
 Android 10以上 · オフライン再生 · オープンソース
 
@@ -17,6 +17,8 @@ Android 10以上 · オフライン再生 · オープンソース
 | ライブラリ | 再生画面 | サウンド |
 |:---:|:---:|:---:|
 | <img src="docs/screenshots/v111/compact-dock.png" width="250" alt="ガラス調のナビゲーションとミニプレイヤーを表示したライブラリ"> | <img src="docs/screenshots/v111/player.png" width="250" alt="ジャケットの色が広がる再生画面"> | <img src="docs/screenshots/v160/filter-high-pass.png" width="250" alt="低音カットを有効にしたサウンド画面。周波数特性とカットする境目を表示"> |
+
+<img src="docs/screenshots/v180/landscape.png" width="760" alt="横置きスタンバイ。左にジャケットを載せたレコード盤と針、右に再生操作">
 
 *画面の楽曲名とアートワークはテスト用に生成したものです。*
 
@@ -42,9 +44,13 @@ Android 10以上 · オフライン再生 · オープンソース
 
 ### アプリ内で更新を確認する
 
-v1.6.0の「設定」にある「ソフトウェアアップデート」から、公開された最新版を確認できます。自動確認は設定で有効にできます。ダウンロードしたAPKの内容と署名を照合し、Androidの確認画面で承認すると更新できます。更新機能がない版からは、APKを手動で上書きしてください。
+v1.6.0以降は「設定」の「ソフトウェアアップデート」から、公開された最新版を確認できます。自動確認は設定で有効にできます。ダウンロードしたAPKの内容と署名を照合し、Androidの確認画面で承認すると更新できます。更新機能がない版からは、APKを手動で上書きしてください。
 
 配布用APKと `update.json` の作成・検証手順は [リリース手順](docs/RELEASE-CONNECT.md) にあります。
+
+### 横置きスタンバイ
+
+再生画面のメニューから「横置きスタンバイ」を選び、本体を横向きにします。再生中はジャケットと盤が一緒に回り、曲が替わると盤を交換します。シークや音量調整は右側の操作から行えます。 [動作録画](https://github.com/noppy3325-droid/Aurio/releases/download/v1.8.0/Aurio-1.8.0-vinyl.mp4)
 
 ### 再生記録
 
