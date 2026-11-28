@@ -1,7 +1,9 @@
 package jp.noppy.lumamusic.data
 
 import android.content.Context
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
+import androidx.datastore.preferences.core.Preferences as StoredPreferences
 import androidx.datastore.preferences.preferencesDataStore
 import jp.noppy.lumamusic.core.OutputMode
 import jp.noppy.lumamusic.core.SmartShuffleCheckpoint
@@ -35,8 +37,9 @@ data class PlaybackSnapshot(
     val shuffleCheckpoint: SmartShuffleCheckpoint? = null,
 )
 
-class SettingsRepository(context: Context) {
-    private val store = context.lumaPreferences
+class SettingsRepository internal constructor(private val store: DataStore<StoredPreferences>) {
+    constructor(context: Context) : this(context.lumaPreferences)
+
     val preferences = store.data.map { p -> Preferences(
         mode = runCatching { OutputMode.valueOf(p[stringPreferencesKey("mode")] ?: "USB_HIGH_QUALITY") }.getOrDefault(OutputMode.STANDARD),
         keepAwake = p[booleanPreferencesKey("awake")] ?: false,
@@ -53,16 +56,44 @@ class SettingsRepository(context: Context) {
     val soundSettings = store.data.map { p -> runCatching {
         val j = JSONObject(p[stringPreferencesKey("sound")] ?: "{}")
         val b = j.optJSONArray("bands")
-        DspConfig(mode = SoundMode.valueOf(j.optString("mode", "DIRECT")), eqEnabled = j.optBoolean("eq", true),
-            bands = List(10) { b?.optDouble(it, 0.0)?.toFloat() ?: 0f }, preampDb = j.optDouble("preamp", 0.0).toFloat(),
-            autoEnabled = j.optBoolean("auto"), normalizeEnabled = j.optBoolean("normalize"),
-            normalizeMode = NormalizeMode.valueOf(j.optString("normalizeMode", "TRACK")), targetLufs = j.optDouble("target", -16.0).toFloat(),
-            widthEnabled = j.optBoolean("widthEnabled"), width = j.optDouble("width", 1.0).toFloat(), preset = j.optString("preset", "フラット")).safe()
+        val filters = j.optJSONObject("filters")
+        DspConfig(
+            mode = SoundMode.valueOf(j.optString("mode", "DIRECT")),
+            eqEnabled = j.optBoolean("eq", true),
+            bands = List(EQ_FREQUENCIES.size) { b?.optDouble(it, 0.0)?.toFloat() ?: 0f },
+            preampDb = j.optDouble("preamp", 0.0).toFloat(),
+            autoEnabled = j.optBoolean("auto"),
+            normalizeEnabled = j.optBoolean("normalize"),
+            normalizeMode = NormalizeMode.valueOf(j.optString("normalizeMode", "TRACK")),
+            targetLufs = j.optDouble("target", -16.0).toFloat(),
+            widthEnabled = j.optBoolean("widthEnabled"),
+            width = j.optDouble("width", 1.0).toFloat(),
+            preset = j.optString("preset", "フラット"),
+            filters = DspFilters(
+                highPassHz = filters?.optDouble("highPassHz", 0.0)?.toFloat() ?: 0f,
+                lowPassHz = filters?.optDouble("lowPassHz", 0.0)?.toFloat() ?: 0f,
+                lowShelfDb = filters?.optDouble("lowShelfDb", 0.0)?.toFloat() ?: 0f,
+                highShelfDb = filters?.optDouble("highShelfDb", 0.0)?.toFloat() ?: 0f,
+            ),
+            comparisonTrimDb = j.optDouble("comparisonTrimDb", 0.0).toFloat(),
+        ).safe()
     }.getOrDefault(DspConfig()) }.distinctUntilChanged()
-    suspend fun saveSound(value: DspConfig) { val v = value.safe(); store.edit { it[stringPreferencesKey("sound")] = JSONObject()
-        .put("mode", v.mode.name).put("eq", v.eqEnabled).put("bands", JSONArray(v.bands)).put("preamp", v.preampDb)
-        .put("auto", v.autoEnabled).put("normalize", v.normalizeEnabled).put("normalizeMode", v.normalizeMode.name)
-        .put("target", v.targetLufs).put("widthEnabled", v.widthEnabled).put("width", v.width).put("preset", v.preset).toString() } }
+
+    suspend fun saveSound(value: DspConfig) {
+        val v = value.safe()
+        val filters = JSONObject()
+            .put("highPassHz", v.filters.highPassHz)
+            .put("lowPassHz", v.filters.lowPassHz)
+            .put("lowShelfDb", v.filters.lowShelfDb)
+            .put("highShelfDb", v.filters.highShelfDb)
+        val payload = JSONObject()
+            .put("mode", v.mode.name).put("eq", v.eqEnabled).put("bands", JSONArray(v.bands)).put("preamp", v.preampDb)
+            .put("auto", v.autoEnabled).put("normalize", v.normalizeEnabled).put("normalizeMode", v.normalizeMode.name)
+            .put("target", v.targetLufs).put("widthEnabled", v.widthEnabled).put("width", v.width).put("preset", v.preset)
+            .put("filters", filters).put("comparisonTrimDb", v.comparisonTrimDb)
+        store.edit { it[stringPreferencesKey("sound")] = payload.toString() }
+    }
+
     val snapshot = store.data.map { p ->
         runCatching {
             val json = JSONObject(p[stringPreferencesKey("queue")] ?: "{}")

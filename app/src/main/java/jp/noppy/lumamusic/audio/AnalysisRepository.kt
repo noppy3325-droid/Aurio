@@ -18,6 +18,9 @@ import java.nio.ByteOrder
 import java.util.concurrent.Executors
 import kotlin.math.*
 
+internal val DspConfig.analysisNormalizationMode: NormalizeMode?
+    get() = normalizeMode.takeIf { normalizeEnabled }
+
 /** Explicit user-requested, one-at-a-time, local decoding. Never part of a library scan. */
 class AnalysisRepository(private val context:Context,private val dao:LibraryDao) {
     companion object {
@@ -31,7 +34,7 @@ class AnalysisRepository(private val context:Context,private val dao:LibraryDao)
         val cache=dao.analysis(track.uri)?.takeIf{it.identity==identity(track)&&it.version==VERSION}
         if(cache?.error!=null)return@withContext null to "解析できません: ${cache.error}"
         val profile=cache?.profile()
-        if(config.normalizeEnabled && config.normalizeMode==NormalizeMode.ALBUM){
+        if(config.analysisNormalizationMode == NormalizeMode.ALBUM){
             val album=dao.tracks().first().filter{it.album==track.album && it.albumArtist.ifBlank{it.artist}==track.albumArtist.ifBlank{track.artist}}
             val all=album.map{t->dao.analysis(t.uri)?.takeIf{it.identity==identity(t)&&it.error==null&&it.complete&&it.estimatedLufs!=null}}
             if(all.isEmpty()||all.any{it==null})return@withContext profile?.copy(estimatedLufs=null) to "アルバム解析待ち（全曲の完了が必要）"
@@ -53,7 +56,14 @@ class AnalysisRepository(private val context:Context,private val dao:LibraryDao)
             refresh(track)
         }
     }
-    private suspend fun refresh(track:Track){if(DspRuntime.sourceUri==track.uri){val cfg=DspRuntime.snapshot.get().config;val(p,message)=cached(track,cfg);if(DspRuntime.sourceUri==track.uri&&DspRuntime.snapshot.get().config==cfg)DspRuntime.analysis(p,message)}}
+    private suspend fun refresh(track: Track) {
+        if (DspRuntime.sourceUri != track.uri) return
+        val config = DspRuntime.snapshot.get().config
+        val (profile, message) = cached(track, config)
+        if (DspRuntime.sourceUri == track.uri &&
+            DspRuntime.snapshot.get().config.analysisNormalizationMode == config.analysisNormalizationMode
+        ) DspRuntime.analysis(profile, message)
+    }
     private suspend fun decode(track:Track):TrackAnalysis {
         val extractor=MediaExtractor();var codec:MediaCodec?=null
         try {
@@ -68,8 +78,32 @@ class AnalysisRepository(private val context:Context,private val dao:LibraryDao)
             var encoding=if(format.containsKey(MediaFormat.KEY_PCM_ENCODING))format.getInteger(MediaFormat.KEY_PCM_ENCODING)else AudioFormat.ENCODING_PCM_16BIT
             var frame=FloatArray(channels)
             var sourceFrames=0L;var eof=false
-            fun consume(buffer:ByteBuffer){buffer.order(ByteOrder.nativeOrder());val bytes=when(encoding){AudioFormat.ENCODING_PCM_FLOAT->4;AudioFormat.ENCODING_PCM_16BIT->2;else->error("解析用PCM形式に未対応")}
-                while(buffer.remaining()>=channels*bytes && sourceFrames<rate*600L){for(ch in 0 until channels)frame[ch]=if(bytes==4)buffer.float else buffer.short/32768f;analyzer.frame(frame);sourceFrames++}}
+            fun consume(buffer: ByteBuffer) {
+                buffer.order(ByteOrder.LITTLE_ENDIAN)
+                val bytes = when (encoding) {
+                    AudioFormat.ENCODING_PCM_16BIT -> 2
+                    AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
+                    AudioFormat.ENCODING_PCM_32BIT, AudioFormat.ENCODING_PCM_FLOAT -> 4
+                    else -> error("解析用PCM形式に未対応")
+                }
+                while (buffer.remaining() >= channels * bytes && sourceFrames < rate * 600L) {
+                    for (channel in frame.indices) {
+                        frame[channel] = when (encoding) {
+                            AudioFormat.ENCODING_PCM_16BIT -> buffer.short / 32768f
+                            AudioFormat.ENCODING_PCM_24BIT_PACKED -> {
+                                val low = buffer.get().toInt() and 0xff
+                                val mid = buffer.get().toInt() and 0xff
+                                val high = buffer.get().toInt()
+                                (low or (mid shl 8) or (high shl 16)) / 8388608f
+                            }
+                            AudioFormat.ENCODING_PCM_32BIT -> buffer.int / 2147483648f
+                            else -> buffer.float
+                        }
+                    }
+                    analyzer.frame(frame)
+                    sourceFrames++
+                }
+            }
             if(mime=="audio/raw"){
                 val data=ByteBuffer.allocateDirect(256*1024)
                 while(sourceFrames<rate*600L){currentCoroutineContext().ensureActive();data.clear();val n=extractor.readSampleData(data,0);if(n<0){eof=true;break};data.position(0);data.limit(n);consume(data);extractor.advance();delay(2)}

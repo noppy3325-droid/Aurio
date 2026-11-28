@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sound_filters_title">Audio filters</string>
+    <string name="sound_filters_summary">Adjust bass, treble, and the frequency range to suit your music and headphones.</string>
+    <string name="sound_filter_high_pass">Cut bass</string>
+    <string name="sound_filter_low_pass">Cut treble</string>
+    <string name="sound_filter_low_shelf">Bass level (120 Hz)</string>
+    <string name="sound_filter_high_shelf">Treble level (6 kHz)</string>
+    <string name="sound_filter_cutoff">%1$s cutoff</string>
+    <string name="sound_filter_rate_limit">The input sample rate limits the available frequencies.</string>
+    <string name="sound_filter_rate_adjusted">Applied at %1$d Hz for this input.</string>
+    <string name="sound_response_title">Filter frequency response</string>
+    <string name="sound_response_scale">20 Hz to %1$s kHz, ±24 dB. The graph excludes preamp and volume adjustments.</string>
+    <string name="sound_response_reference">The graph uses 48 kHz until playback reports the input rate.</string>
+    <string name="sound_tone_reset">Reset EQ and filters</string>
+    <string name="sound_comparison_title">Listening comparison</string>
+    <string name="sound_comparison_trim">Lower Enhance volume</string>
+    <string name="sound_comparison_help">Switch between Direct and Enhance at similar listening levels. Use the device volume controls to adjust Direct playback.</string>
+    <string name="sound_enhance_description">Adjusts the decoded audio. Playback may be quieter to help prevent clipping.</string>
+    <string name="sound_direct_description">Bypasses Aurio audio effects. Output follows Android and the connected device settings.</string>
+    <string name="sound_input_gain">DSP input gain %1$s dB. Sample peak protection is active.</string>
+</resources>

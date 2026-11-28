@@ -19,4 +19,49 @@ class PcmDspTest {
     @Test fun modeChangesRampAndDirectThenPreservesBits(){val e=PcmDspEngine(48000,2);e.configure(DspConfig(mode=SoundMode.ENHANCE,bands=List(10){-3f}));e.process(sine(48000,997.0,2000));e.configure(DspConfig());assertFalse(e.isDirect);e.process(sine(48000,997.0,2000));assertTrue(e.isDirect);val a=sine(48000,997.0,100);assertArrayEquals(a,e.process(a),0f)}
     @Test fun autoCannotOverwriteManualBand(){val a=TrackAnalysis(-16.0,.5,List(10){-2f},48000,48000,true);val e=PcmDspEngine(48000,2);e.configure(DspConfig(mode=SoundMode.ENHANCE,autoEnabled=true,bands=List(10){if(it==5)3f else 0f}),a);val manual=PcmDspEngine(48000,2);manual.configure(DspConfig(mode=SoundMode.ENHANCE,bands=List(10){if(it==5)3f else -2f}));assertEquals(manual.responseDb(1000.0),e.responseDb(1000.0),1e-6)}
     @Test fun disabledAnalysisDoesNotChangeFlatSignal(){val a=TrackAnalysis(-3.0,1.0,List(10){-2f},48000,48000,true);val e=PcmDspEngine(48000,2);e.configure(DspConfig(mode=SoundMode.ENHANCE),a);assertEquals(0.0,e.gainDb,1e-7);val x=sine(48000,997.0);assertArrayEquals(x,e.process(x),1e-6f)}
+
+    @Test fun unchangedSettingsKeepTheActiveFilterState() {
+        val config = DspConfig(mode = SoundMode.ENHANCE, bands = List(10) { -3f })
+        val updated = PcmDspEngine(48000, 2)
+        val uninterrupted = PcmDspEngine(48000, 2)
+        updated.configure(config)
+        uninterrupted.configure(config)
+        val steady = sine(48000, 125.0, 3840)
+        updated.process(steady)
+        uninterrupted.process(steady)
+
+        updated.configure(config.copy(preset = "different name", targetLufs = -22f))
+
+        assertFalse(updated.transitioning)
+        assertArrayEquals(uninterrupted.process(steady), updated.process(steady), 0f)
+    }
+
+    @Test fun limiterPreservesStereoBalanceAndRecoversGradually() {
+        val engine = PcmDspEngine(48000, 2)
+        engine.configure(DspConfig(mode = SoundMode.ENHANCE))
+
+        val output = engine.process(floatArrayOf(2f, .5f, .5f, .125f) + FloatArray(48000) { .5f })
+
+        assertEquals(1f, output[0], 1e-6f)
+        assertEquals(.25f, output[1], 1e-6f)
+        assertTrue(output[2] in .25f.. .255f)
+        assertEquals(output[2] / 4f, output[3], 1e-6f)
+        assertEquals(.5f, output.last(), .005f)
+    }
+
+    @Test fun shortAnalysisDoesNotApplyPositiveGainFromTagsOrEstimate() {
+        val engine = PcmDspEngine(48000, 1)
+        val config = DspConfig(mode = SoundMode.ENHANCE, normalizeEnabled = true)
+        val short = TrackAnalysis(-29.0, .1, emptyList(), 4800, 48000, true)
+        engine.configure(config, short)
+        assertEquals(0.0, engine.gainDb, 0.0)
+        engine.configure(config, short.copy(tagGainDb = 6.0, tagKind = "ReplayGain"))
+        assertEquals(0.0, engine.gainDb, 0.0)
+        engine.configure(config, short.copy(estimatedLufs = null, frames = 48000, tagGainDb = 6.0))
+        assertEquals(0.0, engine.gainDb, 0.0)
+        engine.configure(config, short.copy(frames = 0, sampleRate = 0, tagGainDb = 4.0))
+        assertEquals(4.0, engine.gainDb, 0.0)
+        engine.configure(config, short.copy(tagGainDb = -4.0))
+        assertEquals(-4.0, engine.gainDb, 0.0)
+    }
 }

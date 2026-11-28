@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sound_filters_title">フィルター</string>
+    <string name="sound_filters_summary">曲やイヤホンに合わせて低音・高音の量や聴こえる帯域を調整できます。</string>
+    <string name="sound_filter_high_pass">低音をカット</string>
+    <string name="sound_filter_low_pass">高音をカット</string>
+    <string name="sound_filter_low_shelf">低音の量（120 Hz）</string>
+    <string name="sound_filter_high_shelf">高音の量（6 kHz）</string>
+    <string name="sound_filter_cutoff">%1$sの境目</string>
+    <string name="sound_filter_rate_limit">入力のサンプルレートに応じて使用できる周波数が制限されます。</string>
+    <string name="sound_filter_rate_adjusted">現在の入力では%1$d Hzで動作します。</string>
+    <string name="sound_response_title">フィルターの周波数特性</string>
+    <string name="sound_response_scale">20 Hz〜%1$s kHz、±24 dB。プリアンプや音量補正はグラフに含みません。</string>
+    <string name="sound_response_reference">入力待ちのため、48 kHzでの特性を表示しています。</string>
+    <string name="sound_tone_reset">EQとフィルターをリセット</string>
+    <string name="sound_comparison_title">聴き比べの音量</string>
+    <string name="sound_comparison_trim">Enhanceの音量を下げる</string>
+    <string name="sound_comparison_help">DirectとEnhanceを切り替え、同じ程度の音量で聴き比べられます。Directの音量は端末の音量ボタンで調整できます。</string>
+    <string name="sound_enhance_description">EQなどで音を調整します。音割れを抑えるため、音量が下がることがあります。</string>
+    <string name="sound_direct_description">Aurioの音声補正をバイパスします。出力はAndroidと接続機器の設定に従います。</string>
+    <string name="sound_input_gain">DSPの入力ゲイン %1$s dB。サンプルピークを保護します。</string>
+</resources>

@@ -13,9 +13,21 @@ import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
 
-data class DspSnapshot(val config:DspConfig=DspConfig(),val analysis:TrackAnalysis?=null,val revision:Long=0)
-data class DspStatus(val mode:SoundMode=SoundMode.DIRECT,val sampleRate:Int?=null,val channels:Int?=null,val processedFrames:Long=0,val applied:Boolean=false,val gainDb:Double=0.0,val analysis:String="解析待ち",val error:String?=null)
-/** Settings are atomic; the audio callback never touches Room, files, or coroutines. */
+data class DspSnapshot(val config: DspConfig = DspConfig(), val analysis: TrackAnalysis? = null, val revision: Long = 0)
+
+data class DspStatus(
+    val mode: SoundMode = SoundMode.DIRECT,
+    val sampleRate: Int? = null,
+    val channels: Int? = null,
+    val processedFrames: Long = 0,
+    val applied: Boolean = false,
+    val transitioning: Boolean = false,
+    val gainDb: Double = 0.0,
+    val analysis: String = "解析待ち",
+    val error: String? = null,
+)
+
+/** Publishes one coherent configuration to the audio thread, with no I/O in the PCM loop. */
 object DspRuntime {
     @Volatile var sourceUri:String?=null
         private set
@@ -25,18 +37,54 @@ object DspRuntime {
     private var analysisMessage="解析待ち"
     private val mutable=MutableStateFlow(DspStatus())
     val state=mutable.asStateFlow()
-    @Synchronized fun settings(config:DspConfig) { snapshot.updateAndGet{it.copy(config=config.safe(),revision=it.revision+1)}; mutable.update{it.copy(mode=config.mode,applied=true)}; publish() }
+    @Synchronized fun settings(config: DspConfig) = publish(config.safe())
     @Synchronized fun analysis(value:TrackAnalysis?,message:String) { rawAnalysis=value;analysisMessage=message;publish() }
     @Synchronized fun metadata(values:Map<String,String>) { tags=tags+values;publish() }
-    private fun publish(){val cfg=snapshot.get().config;val tag=parseGainTags(tags,cfg.normalizeMode==NormalizeMode.ALBUM,cfg.targetLufs.toDouble())
-        val value=if(tag!=null)(rawAnalysis?:TrackAnalysis(null,tag.peak?:1.0,List(10){0f},0,0,false)).copy(tagGainDb=tag.gainDb,tagKind=tag.kind,peak=tag.peak?:rawAnalysis?.peak?:1.0)else rawAnalysis
-        snapshot.updateAndGet{it.copy(analysis=value,revision=it.revision+1)}
-        mutable.update{it.copy(analysis=if(tag!=null && cfg.normalizeEnabled)"${tag.kind}タグ優先 / $analysisMessage"else analysisMessage)}
+    private fun publish(config: DspConfig = snapshot.get().config) {
+        val tag = if (config.normalizeEnabled) {
+            parseGainTags(tags, config.normalizeMode == NormalizeMode.ALBUM, config.targetLufs.toDouble())
+        } else null
+        val value = if (tag == null) rawAnalysis else {
+            val measured = rawAnalysis ?: TrackAnalysis(null, 1.0, EmptyToneGains, 0, 0, false)
+            measured.copy(tagGainDb = tag.gainDb, tagKind = tag.kind, peak = tag.peak ?: measured.peak)
+        }
+        snapshot.updateAndGet {
+            if (it.config == config && it.analysis == value) it
+            else DspSnapshot(config, value, it.revision + 1)
+        }
+        mutable.update {
+            it.copy(mode = config.mode, analysis = if (tag == null) analysisMessage else "${tag.kind}タグ優先 / $analysisMessage")
+        }
     }
-    @Synchronized fun source(uri:String?) { sourceUri=uri;tags=emptyMap();mutable.update{it.copy(sampleRate=null,channels=null,processedFrames=0,applied=true)};analysis(null,"解析待ち") }
-    fun audio(rate:Int,channels:Int,frames:Long,applied:Boolean,gain:Double) { mutable.update{it.copy(sampleRate=rate,channels=channels,processedFrames=frames,applied=applied,gainDb=gain,error=null)} }
-    fun unavailable(message:String) { mutable.update{it.copy(applied=false,error=message)} }
-    fun stopped() { mutable.update{it.copy(applied=false,sampleRate=null,channels=null)} }
+
+    @Synchronized fun source(uri: String?) {
+        sourceUri = uri
+        tags = emptyMap()
+        mutable.update { it.copy(sampleRate = null, channels = null, processedFrames = 0, gainDb = 0.0) }
+        analysis(null, "解析待ち")
+    }
+
+    fun audio(rate: Int, channels: Int, frames: Long, applied: Boolean, transitioning: Boolean, gain: Double) {
+        mutable.update {
+            it.copy(
+                sampleRate = rate, channels = channels, processedFrames = frames,
+                applied = applied, transitioning = transitioning, gainDb = gain, error = null,
+            )
+        }
+    }
+
+    fun unavailable(message: String) {
+        mutable.update {
+            it.copy(applied = false, transitioning = false, sampleRate = null, channels = null,
+                processedFrames = 0, gainDb = 0.0, error = message)
+        }
+    }
+
+    fun stopped() {
+        mutable.update { DspStatus(mode = it.mode, analysis = it.analysis) }
+    }
+
+    private val EmptyToneGains = List(10) { 0f }
 }
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -46,21 +94,37 @@ class LumaAudioProcessor:BaseAudioProcessor() {
     private var revision= -1L
     private var frames=0L
     private var nextReport=0L
+    private var lastApplied = false
+    private var lastTransition = false
+
     override fun onConfigure(inputAudioFormat:AudioProcessor.AudioFormat):AudioProcessor.AudioFormat {
         if(inputAudioFormat.encoding!=C.ENCODING_PCM_16BIT || inputAudioFormat.channelCount !in 1..8 || inputAudioFormat.sampleRate<=0){
             DspRuntime.unavailable("このPCM形式ではAurio DSPを利用できません")
-            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+            return AudioProcessor.AudioFormat.NOT_SET
         }
         return inputAudioFormat // Remains active in Direct so switching never recreates the player.
     }
-    override fun onFlush() { engine=PcmDspEngine(inputAudioFormat.sampleRate,inputAudioFormat.channelCount);frame=FloatArray(inputAudioFormat.channelCount);revision= -1;frames=0;nextReport=0 }
+
+    override fun onFlush() {
+        engine = if (isActive) PcmDspEngine(inputAudioFormat.sampleRate, inputAudioFormat.channelCount) else null
+        frame = FloatArray(engine?.channels ?: 0)
+        revision = -1
+        frames = 0
+        nextReport = 0
+        lastApplied = false
+        lastTransition = false
+    }
     override fun queueInput(inputBuffer:ByteBuffer) {
         // Media3 also calls processors with the shared EMPTY_BUFFER while draining.
         // Do not make that same zero-capacity object both source and destination.
         if (!inputBuffer.hasRemaining()) return
         val dsp=engine?:return
         val snapshot=DspRuntime.snapshot.get()
-        if(snapshot.revision!=revision && !dsp.transitioning){dsp.configure(snapshot.config,snapshot.analysis);revision=snapshot.revision}
+        val changed = snapshot.revision != revision
+        if (changed) {
+            dsp.configure(snapshot.config, snapshot.analysis)
+            revision = snapshot.revision
+        }
         val output=replaceOutputBuffer(inputBuffer.remaining()).order(ByteOrder.nativeOrder())
         inputBuffer.order(ByteOrder.nativeOrder())
         val count=inputBuffer.remaining()/(2*frame.size)
@@ -71,7 +135,13 @@ class LumaAudioProcessor:BaseAudioProcessor() {
             while(inputBuffer.hasRemaining())output.put(inputBuffer.get())
         }
         frames+=count
-        if(frames>=nextReport){DspRuntime.audio(dsp.sampleRate,dsp.channels,frames,!dsp.isDirect,dsp.gainDb);nextReport=frames+dsp.sampleRate/2}
+        val applied = !dsp.isDirect
+        if (changed || applied != lastApplied || dsp.transitioning != lastTransition || frames >= nextReport) {
+            DspRuntime.audio(dsp.sampleRate, dsp.channels, frames, applied, dsp.transitioning, dsp.gainDb)
+            nextReport = frames + dsp.sampleRate / 2
+            lastApplied = applied
+            lastTransition = dsp.transitioning
+        }
         output.flip()
     }
     override fun onReset(){engine=null;frame=FloatArray(0);DspRuntime.stopped()}

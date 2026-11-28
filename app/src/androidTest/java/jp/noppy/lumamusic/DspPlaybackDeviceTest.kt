@@ -47,9 +47,32 @@ class DspPlaybackDeviceTest {
             i.runOnMainSync { c.setMediaItem(MediaItem.Builder().setMediaId(file.name).setUri(Uri.fromFile(file)).build());c.prepare();c.play() }
             await("Direct playback"){c.isPlaying&&c.currentPosition>300&&!DspRuntime.state.value.applied&&DspRuntime.state.value.sampleRate==rate}
             var before=0L;i.runOnMainSync{before=c.currentPosition}
-            runBlocking{app.settings.saveSound(DspConfig(mode=SoundMode.ENHANCE,bands=List(10){if(it==5)3f else 0f},widthEnabled=true,width=1.1f))}
-            await("Enhance consumes PCM without resetting position"){DspRuntime.state.value.mode==SoundMode.ENHANCE&&DspRuntime.state.value.applied&&c.currentPosition>before+300}
+            val enhance = DspConfig(
+                mode = SoundMode.ENHANCE, bands = List(10) { if (it == 5) 3f else 0f },
+                filters = DspFilters(highPassHz = 70f, lowPassHz = 9000f, lowShelfDb = 3f, highShelfDb = -2f),
+                widthEnabled = true, width = 1.1f,
+            )
+            runBlocking { app.settings.saveSound(enhance) }
+            await("Enhance consumes PCM without resetting position") {
+                val state = DspRuntime.state.value
+                state.mode == SoundMode.ENHANCE && state.applied && !state.transitioning && c.currentPosition > before + 300
+            }
             i.runOnMainSync { assertEquals(file.name,c.currentMediaItem?.mediaId);assertEquals(1,c.mediaItemCount);assertNull(c.playerError);assertFalse(app.output.state.value.mixerApplied);before=c.currentPosition }
+            runBlocking {
+                repeat(20) { step ->
+                    app.settings.saveSound(enhance.copy(filters = enhance.filters.copy(highPassHz = 20f + step * 8)))
+                }
+                app.settings.saveSound(enhance.copy(comparisonTrimDb = -6f, preset = "v160 device A/B"))
+            }
+            await("Filter changes and comparison trim preserve the current timeline") {
+                val state = DspRuntime.state.value
+                state.applied && !state.transitioning && c.isPlaying && c.currentPosition > before + 400
+            }
+            i.runOnMainSync {
+                assertEquals(file.name, c.currentMediaItem?.mediaId)
+                assertNull(c.playerError)
+                before = c.currentPosition
+            }
             runBlocking{app.settings.saveSound(DspConfig())}
             await("Direct bypass resumes"){DspRuntime.state.value.mode==SoundMode.DIRECT&&!DspRuntime.state.value.applied&&c.currentPosition>before+300}
             i.runOnMainSync { assertNull(c.playerError);android.util.Log.i("LumaDspDevice","wallMs=${SystemClock.elapsedRealtime()-start} processCpuMs=${Process.getElapsedCpuTime()-cpu} status=${DspRuntime.state.value} output=${app.output.state.value}") }

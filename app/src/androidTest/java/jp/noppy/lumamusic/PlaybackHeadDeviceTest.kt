@@ -19,6 +19,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import jp.noppy.lumamusic.audio.DspRuntime
 import jp.noppy.lumamusic.audio.LumaAudioProcessor
 import jp.noppy.lumamusic.core.dsp.DspConfig
+import jp.noppy.lumamusic.core.dsp.DspFilters
 import jp.noppy.lumamusic.core.dsp.SoundMode
 import jp.noppy.lumamusic.playback.PlaybackShuffle
 import org.junit.Assert.*
@@ -34,6 +35,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.log10
 import kotlin.math.sin
 
 /** Measures PCM after Aurio's processor, before the platform output. */
@@ -69,15 +71,32 @@ class PlaybackHeadDeviceTest {
         checkHead(48_000, SoundMode.ENHANCE, items = 10, start = Start.SHUFFLED)
     }
 
+    @Test fun wavFormatsAndLiveFilterReachTheSink() {
+        for (rate in listOf(44100, 48000)) {
+            val referenceDb = if (rate == 44100) -13.10 else -12.97
+            checkHead(rate, SoundMode.DIRECT, items = 2, bits = 24, channels = 2)
+            checkHead(
+                rate, SoundMode.ENHANCE, items = 2, bits = 24, channels = 2,
+                filters = DspFilters(lowPassHz = 3000f), toneHz = 6000,
+                expectedAttenuation = (referenceDb - 0.15)..(referenceDb + 0.15),
+            )
+            checkHead(rate, SoundMode.DIRECT, items = 2, channels = 2)
+        }
+    }
+
     private enum class Start { QUEUE, MANUAL_SKIP, REPEAT_ONE, SHUFFLED }
 
-    private fun checkHead(rate: Int, mode: SoundMode, extension: String = "wav", items: Int = 21, start: Start = Start.QUEUE) {
+    private fun checkHead(
+        rate: Int, mode: SoundMode, extension: String = "wav", items: Int = 21, start: Start = Start.QUEUE,
+        bits: Int = 16, channels: Int = 1, filters: DspFilters = DspFilters(), toneHz: Int = 1000,
+        expectedAttenuation: ClosedFloatingPointRange<Double>? = null,
+    ) {
         val original = DspRuntime.snapshot.get()
         val assets = instrumentation.context.assets
-        val source = if (extension == "wav") markerWave(rate)
+        val source = if (extension == "wav") markerWave(rate, bits, channels, toneHz)
             else assets.open("playback-head/head.$extension").use { it.readBytes() }
         val file = File.createTempFile("aurio-track-head-", ".$extension", context.cacheDir).apply { writeBytes(source) }
-        val sourcePcm = if (extension == "wav") source.copyOfRange(44, source.size)
+        val sourcePcm = if (extension == "wav") markerWave(rate, 16, channels, toneHz).let { it.copyOfRange(44, it.size) }
             else assets.open("playback-head/head-$extension.pcm").use { it.readBytes() }
         val tap = PcmTap()
         val completed = CountDownLatch(1)
@@ -85,7 +104,7 @@ class PlaybackHeadDeviceTest {
         lateinit var player: ExoPlayer
         try {
             instrumentation.runOnMainSync {
-                DspRuntime.settings(DspConfig(mode = mode))
+                DspRuntime.settings(DspConfig(mode = mode, filters = filters))
                 val renderer = object : DefaultRenderersFactory(context) {
                     override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink =
                         DefaultAudioSink.Builder().setAudioCapabilities(AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES)
@@ -136,6 +155,24 @@ class PlaybackHeadDeviceTest {
                     val output = pcm.copyOfRange(offset, offset + sourcePcm.size)
                     if (mode == SoundMode.DIRECT) assertArrayEquals("Track $index sample sequence", sourcePcm, output)
                     else assertTrue("Track $index retains its first 10 ms of signal", output.take(rate / 50).any { it != 0.toByte() })
+                    if (expectedAttenuation != null) {
+                        val reference = ByteBuffer.wrap(sourcePcm).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                        val actual = ByteBuffer.wrap(output).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                        for (channel in 0 until channels) {
+                            var inEnergy = 0.0
+                            var outEnergy = 0.0
+                            for (frame in rate / 100 until rate / 25) {
+                                val sampleIndex = frame * channels + channel
+                                val dry = reference[sampleIndex].toDouble()
+                                val wet = actual[sampleIndex].toDouble()
+                                inEnergy += dry * dry
+                                outEnergy += wet * wet
+                            }
+                            val attenuation = 10 * log10(outEnergy / inEnergy)
+                            Log.i("AurioPcmQA", "rate=$rate bits=$bits channel=$channel LP3000 tone=$toneHz attenuationDb=$attenuation")
+                            assertTrue("Measured LP response $attenuation outside $expectedAttenuation", attenuation in expectedAttenuation)
+                        }
+                    }
                 }
                 toneStarts = emptyList()
             } else {
@@ -173,7 +210,7 @@ class PlaybackHeadDeviceTest {
             if (start == Start.QUEUE) context.getExternalFilesDir("playback-qa")?.let { directory ->
                 File(directory, "v140-$extension-$rate-${mode.name}.pcm").writeBytes(pcm.copyOf(sourcePcm.size))
             }
-            Log.i("AurioPcmQA", "format=$extension rate=$rate mode=$mode start=$start transitions=${positions.size} frames=${pcm.size / 2} maxHeadError=$maxHeadError starts=$toneStarts firstPositions=$positions")
+            Log.i("AurioPcmQA", "format=$extension rate=$rate bits=$bits channels=$channels mode=$mode start=$start transitions=${positions.size} frames=${pcm.size / (2 * channels)} maxHeadError=$maxHeadError starts=$toneStarts firstPositions=$positions")
         } finally {
             instrumentation.runOnMainSync { player.release(); DspRuntime.settings(original.config) }
             file.delete()
@@ -194,16 +231,22 @@ class PlaybackHeadDeviceTest {
         if (start >= 0) add(start..loud)
     }
 
-    private fun markerWave(rate: Int): ByteArray {
+    private fun markerWave(rate: Int, bits: Int, channels: Int, toneHz: Int): ByteArray {
         val frames = rate * 3 / 10
-        val dataBytes = frames * 2
+        val frameBytes = bits / 8 * channels
+        val dataBytes = frames * frameBytes
         return ByteBuffer.allocate(44 + dataBytes).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("RIFF".toByteArray()).putInt(36 + dataBytes).put("WAVEfmt ".toByteArray()).putInt(16)
-            putShort(1).putShort(1).putInt(rate).putInt(rate * 2).putShort(2).putShort(16)
+            putShort(1).putShort(channels.toShort()).putInt(rate).putInt(rate * frameBytes)
+                .putShort(frameBytes.toShort()).putShort(bits.toShort())
             put("data".toByteArray()).putInt(dataBytes)
             repeat(frames) { index ->
-                val sample = if (index < rate / 20) sin((index + 1) * 2 * PI * 1_000 / rate) * 8_000 else 0.0
-                putShort(sample.toInt().toShort())
+                val sample = if (index < rate / 20) (sin((index + 1) * 2 * PI * toneHz / rate) * 8_000).toInt() else 0
+                repeat(channels) { channel ->
+                    val value = if (channel == 0) sample else -sample / 2
+                    if (bits == 24) put((index and 0xff).toByte())
+                    putShort(value.toShort())
+                }
             }
         }.array()
     }

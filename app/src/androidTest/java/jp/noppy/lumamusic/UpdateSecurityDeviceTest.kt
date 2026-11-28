@@ -6,12 +6,15 @@ import android.content.pm.PackageInstaller
 import android.provider.Settings
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.work.WorkManager
 import jp.noppy.lumamusic.update.ApkVerifier
 import jp.noppy.lumamusic.update.InstallState
 import jp.noppy.lumamusic.update.UpdateCandidate
+import jp.noppy.lumamusic.update.UpdateCheckWorker
 import jp.noppy.lumamusic.update.UpdateInstallReceiver
 import jp.noppy.lumamusic.update.UpdateInstaller
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -22,11 +25,36 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 
 @RunWith(AndroidJUnit4::class)
 class UpdateSecurityDeviceTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    @Test fun automaticCheckOptInAddsAndRemovesPeriodicWork() = runBlocking {
+        val updates = (context.applicationContext as LumaApp).updates
+        val workManager = WorkManager.getInstance(context)
+        val original = updates.state.value.autoCheck
+        suspend fun awaitSchedule(enabled: Boolean) {
+            withTimeout(12_000) {
+                while (true) {
+                    val infos = workManager.getWorkInfosForUniqueWork(UpdateCheckWorker.UniqueName).get(5, TimeUnit.SECONDS)
+                    if (updates.state.value.autoCheck == enabled && infos.any { !it.state.isFinished } == enabled) return@withTimeout
+                    delay(100)
+                }
+            }
+        }
+        try {
+            updates.setAutoCheck(true)
+            awaitSchedule(true)
+            updates.setAutoCheck(false)
+            awaitSchedule(false)
+        } finally {
+            updates.setAutoCheck(original)
+            awaitSchedule(original)
+        }
+    }
 
     @Test fun theInstalledSignedArchiveCannotBeReinstalledAsAnUpdate() {
         val apk = File(context.applicationInfo.sourceDir)

@@ -305,8 +305,19 @@ class QueuePlaybackDeviceTest {
                 assertEquals(originalQueue.size, observer.mediaItemCount)
                 assertTrue(ui.quickShuffle(tracks, Random(firstSeed)))
             }
-            await("All ten tracks finish with Repeat Off") {
-                observer.playbackState == Player.STATE_ENDED && observer.mediaItemCount == tracks.size
+            try {
+                await("All ten tracks finish with Repeat Off") {
+                    observer.playbackState == Player.STATE_ENDED && observer.mediaItemCount == tracks.size
+                }
+            } catch (failure: AssertionError) {
+                main {
+                    Log.e("AurioShuffleQA", "state=${observer.playbackState} ready=${observer.playWhenReady} " +
+                        "items=${observer.mediaItemCount} index=${observer.currentMediaItemIndex} " +
+                        "repeat=${observer.repeatMode} next=${observer.nextMediaItemIndex} " +
+                        "position=${observer.currentPosition} error=${observer.playerError?.errorCodeName} " +
+                        "transitions=${played.map { id -> tracks.indexOfFirst { it.uri == id } }}")
+                }
+                throw failure
             }
             val checkpoint = runBlocking {
                 withTimeout(5_000) {

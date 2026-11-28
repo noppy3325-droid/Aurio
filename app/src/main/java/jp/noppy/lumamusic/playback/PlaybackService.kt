@@ -32,6 +32,8 @@ import jp.noppy.lumamusic.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
@@ -78,8 +80,8 @@ class PlaybackService : MediaSessionService() {
                         DefaultAudioSink.AudioTrackProvider.DEFAULT.getAudioTrack(config, attributes, sessionId, trackContext).also(app.output::observe)
                     }
                 }
-                // Verified against Media3 1.11.1 sources: the no-context builder pins PCM-only
-                // capabilities, while the float-output path bypasses custom processors.
+                // Keep a shared PCM path for Direct and Enhance. The Media3 float-output
+                // and offload paths can skip custom processors.
                 return DefaultAudioSink.Builder().setAudioTrackProvider(provider)
                     .setAudioCapabilities(AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES)
                     .setAudioOffloadSupportProvider { _, _ -> AudioOffloadSupport.DEFAULT_UNSUPPORTED }
@@ -189,7 +191,15 @@ class PlaybackService : MediaSessionService() {
         })
         scope.launch { restorePlayback() }
         scope.launch { app.settings.preferences.collect { app.output.mode(it.mode) } }
-        scope.launch { app.settings.soundSettings.collect { DspRuntime.settings(it); updateProcessing(); loadAnalysis() } }
+        scope.launch {
+            app.settings.soundSettings
+                .onEach {
+                    DspRuntime.settings(it)
+                    updateProcessing()
+                }
+                .distinctUntilChangedBy { it.analysisNormalizationMode }
+                .collect { loadAnalysis() }
+        }
         scope.launch { DspRuntime.state.collect { updateProcessing() } }
         scope.launch {
             app.library.tracks.conflate().collect { tracks ->
@@ -390,13 +400,16 @@ class PlaybackService : MediaSessionService() {
         }}
         if(values.isNotEmpty())DspRuntime.metadata(values)
     }
-    private fun loadAnalysis(){
+    private fun loadAnalysis() {
         analysisJob?.cancel()
-        val uri=player.currentMediaItem?.mediaId?:return
-        analysisJob=scope.launch { val track=withContext(Dispatchers.IO){app.library.dao.track(uri)}?:return@launch
-            val cfg=DspRuntime.snapshot.get().config
-            val(profile,message)=analysis.cached(track,cfg)
-            if(player.currentMediaItem?.mediaId==uri&&DspRuntime.snapshot.get().config==cfg)DspRuntime.analysis(profile,message)
+        val uri = player.currentMediaItem?.mediaId ?: return
+        analysisJob = scope.launch {
+            val track = withContext(Dispatchers.IO) { app.library.dao.track(uri) } ?: return@launch
+            val config = DspRuntime.snapshot.get().config
+            val (profile, message) = analysis.cached(track, config)
+            if (player.currentMediaItem?.mediaId == uri &&
+                DspRuntime.snapshot.get().config.analysisNormalizationMode == config.analysisNormalizationMode
+            ) DspRuntime.analysis(profile, message)
         }
     }
     private fun snapshot() = PlaybackSnapshot(
