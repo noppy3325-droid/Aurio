@@ -22,6 +22,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -35,6 +36,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,6 +49,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @Composable fun LumaScreen(vm: LumaViewModel, standby: StandbyController) {
     val tracks by vm.tracks.collectAsStateWithLifecycle()
@@ -67,6 +70,8 @@ import kotlin.math.abs
     val keyboard = LocalSoftwareKeyboardController.current
     val pager = rememberPagerState { LumaTabs.size }
     val sheet = rememberPlayerSheetState()
+    val libraryShuffle = remember { LibraryShuffleState() }
+    var shuffleRipple by remember { mutableStateOf<Offset?>(null) }
     val playerVisible = playback.mediaId != null && sheet.active
     val playerCoversBars by remember(sheet) { derivedStateOf { sheet.progress > .92f } }
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -210,6 +215,7 @@ import kotlin.math.abs
                                             section = tab,
                                             settings = { showSettings = true },
                                             active = active,
+                                            shuffle = libraryShuffle.takeIf { tab == "library" },
                                         )
                                     }
                                 }
@@ -236,11 +242,30 @@ import kotlin.math.abs
                                 miniPlayer = miniPlayer,
                                 onLensOwnershipChanged = { lensOwnsPointer = it },
                             )
+                            val libraryVisible = LumaTabs[pager.settledPage].key == "library" && !pager.isScrollInProgress
+                            val anchor = libraryShuffle.anchor
+                            if (libraryVisible && canSwipeTabs && anchor != null) {
+                                LibraryShuffleButton(
+                                    enabled = playback.connected && libraryShuffle.tracks.isNotEmpty(),
+                                    modifier = Modifier.absoluteOffset {
+                                        val radius = LibraryShuffleTouchSize.toPx() / 2f
+                                        IntOffset((anchor.x - radius).roundToInt(), (anchor.y - radius).roundToInt())
+                                    },
+                                ) {
+                                    vm.quickShuffle(libraryShuffle.tracks) {
+                                        if (!reducedMotion) shuffleRipple = anchor
+                                        openPlayer()
+                                    }
+                                }
+                            }
                         })
                         if (playback.mediaId != null) {
                             tabState.SaveableStateProvider("player-overlay") {
                                 PlayerSheet(sheet, vm, playback, selected, users.any { it.uri == playback.mediaId && it.favorite }, standby, { showOutput = true }, openSound, Modifier.matchParentSize())
                             }
+                        }
+                        shuffleRipple?.let { origin ->
+                            LibraryShuffleRipple(origin, Modifier.matchParentSize()) { shuffleRipple = null }
                         }
                     }
                 }

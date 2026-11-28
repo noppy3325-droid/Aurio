@@ -158,7 +158,7 @@ class UiSmokeTest {
         frameStep: Int = 5,
         simulateFlickTiming: Boolean = false,
         inspect: (() -> Unit)? = null,
-    ) {
+    ): Long {
         val view = activity.window.decorView
         val down = SystemClock.uptimeMillis()
         fun dispatch(action: Int, fraction: Float, eventTime: Long = SystemClock.uptimeMillis()) {
@@ -181,6 +181,7 @@ class UiSmokeTest {
         }
         val releaseTime = if (simulateFlickTiming) down + durationMs + 1 else SystemClock.uptimeMillis()
         dispatch(if (cancel) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP, if (reverse) 0f else 1f, releaseTime)
+        return releaseTime - down
     }
 
     private fun tabSelected(label: String): Boolean = nodes().any { node ->
@@ -567,7 +568,32 @@ class UiSmokeTest {
             }
             screenshot("01-library-light")
             val fullLibrary = app.library.tracks.first().map(Track::uri).toSet()
+            eventually("glass shuffle control") { textPresent("全曲シャッフル") }
+            val shuffleBounds = android.graphics.Rect()
+            val sortBounds = android.graphics.Rect()
+            val libraryControls = nodes()
+            libraryControls.first { it.contentDescription?.toString() == "全曲シャッフル" }.getBoundsInScreen(shuffleBounds)
+            libraryControls.first { it.contentDescription?.toString() == "曲の並べ替え" }.getBoundsInScreen(sortBounds)
+            assertEquals("Shuffle shares the sort row", sortBounds.centerY(), shuffleBounds.centerY())
+            val windowView = activity.window.decorView
+            val origin = IntArray(2).also(windowView::getLocationOnScreen)
+            val x = (shuffleBounds.exactCenterX() - origin[0]) / windowView.width
+            val y = (shuffleBounds.exactCenterY() - origin[1]) / windowView.height
+            swipe(activity, x, y, x, y, durationMs = 150)
+            assertFalse(textPresent("プレイヤーを閉じる"))
+            swipe(activity, x, y, x - .18f, y, durationMs = 3_250)
+            assertFalse(textPresent("プレイヤーを閉じる"))
+            val releasedAfter = swipe(activity, x, y, x, y, durationMs = 1_700)
+            assertTrue("The short test hold lasted $releasedAfter ms", releasedAfter < 3_000)
+            assertFalse("A hold released before three seconds must not start playback", textPresent("プレイヤーを閉じる"))
+            main { assertFalse(player.shuffleModeEnabled) }
             click("全曲シャッフル")
+            assertTrue(textPresent("全曲をシャッフルしますか？"))
+            assertFalse(textPresent("プレイヤーを閉じる"))
+            click("キャンセル")
+            swipe(activity, x, y, x, y, durationMs = 3_600, frameStep = 9) {
+                main { assertTrue("Playback is requested before the finger is released", player.shuffleModeEnabled) }
+            }
             eventually("Library Quick Shuffle starts the displayed song collection") {
                 var active = false
                 main {
@@ -628,7 +654,7 @@ class UiSmokeTest {
                 assertDockProgressInset()
             }
             val lastTrack = tracks.first()
-            val lastRowIndex = app.library.tracks.first().size // Track count header occupies item zero.
+            val lastRowIndex = app.library.tracks.first().size // The count and actions share item zero.
             val scrollToPosition = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_TO_POSITION.id
             fun scrollToLibraryIndex(index: Int) = verticalScroller()?.performAction(scrollToPosition, Bundle().apply {
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_ROW_INT, index)
@@ -641,6 +667,7 @@ class UiSmokeTest {
                 }
             }
             eventually("final library track is visible") { textPresent(lastTrack.title) }
+            assertFalse("The shuffle icon scrolls with its row", textPresent("全曲シャッフル"))
             fun bounds(node: AccessibilityNodeInfo) = android.graphics.Rect().also(node::getBoundsInScreen)
             val bottomTrack = nodes().first { it.text?.toString() == lastTrack.title }
             val bottomMenu = nodes().filter { it.contentDescription?.toString() == "曲の操作" }
@@ -673,7 +700,9 @@ class UiSmokeTest {
                     Thread.sleep(270)
                 }
             }
-            eventually("list returns to fixture library") { textPresent("曲の並べ替え") }
+            eventually("list returns to its first rows") {
+                nodes().any { it.text?.toString() == top.title && bounds(it).centerY() < windowView.height / 2 }
+            }
             assertTrue("library scroll dispatches", verticalScroller()?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == true)
             Thread.sleep(800)
             screenshot("02-library-scroll-glass")

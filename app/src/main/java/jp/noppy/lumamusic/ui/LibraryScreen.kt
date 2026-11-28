@@ -31,6 +31,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -130,6 +132,7 @@ internal fun LibraryScreen(
     active: Boolean = true,
     initialDetail: LibraryDetail? = null,
     onCloseDetail: () -> Unit = {},
+    shuffle: LibraryShuffleState? = null,
 ) {
     val scan by vm.scan.collectAsStateWithLifecycle()
     val playback by vm.playbackSummary.collectAsStateWithLifecycle()
@@ -215,6 +218,7 @@ internal fun LibraryScreen(
         }
         sorted
     }
+    val shuffleHeader = shuffle != null && detailKey == null && category == LibraryCategory.Songs && !isPlaylists
 
     Column(Modifier.fillMaxSize()) {
         PageHeading(
@@ -231,17 +235,6 @@ internal fun LibraryScreen(
             ChoiceChips(categories.map(LibraryCategory::label), category.label) { label ->
                 category = categories.first { it.label == label }
             }
-            if (category == LibraryCategory.Songs) {
-                FilledTonalButton(
-                    onClick = { vm.quickShuffle(visible, openPlayer) },
-                    modifier = Modifier.padding(start = LumaSpacing.Page, top = 4.dp),
-                    enabled = playback.connected && visible.isNotEmpty(),
-                ) {
-                    Icon(Icons.Rounded.Shuffle, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("全曲シャッフル")
-                }
-            }
         }
         if (scan.running && initialDetail == null) {
             Row(Modifier.padding(horizontal = LumaSpacing.Page, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -250,7 +243,6 @@ internal fun LibraryScreen(
                 TrackText("音楽を読み込み中 · ${scan.count}曲見つかりました", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-
         stateHolder.SaveableStateProvider("${category.name}:${detailKey.orEmpty()}:$folderPath") {
             when {
                 tracks.isEmpty() && detailKey == null && category !in setOf(LibraryCategory.Folders, LibraryCategory.Playlists) ->
@@ -361,6 +353,20 @@ internal fun LibraryScreen(
                                         }
                                     }
                                 }
+                            }
+                            if (shuffleHeader) {
+                                SideEffect { shuffle.tracks = visible }
+                                DisposableEffect(shuffle) {
+                                    onDispose {
+                                        shuffle.anchor = null
+                                        shuffle.tracks = emptyList()
+                                    }
+                                }
+                                Spacer(Modifier.size(LibraryShuffleTouchSize).onGloballyPositioned { coordinates ->
+                                    val bounds = coordinates.boundsInRoot()
+                                    // Keep the overlay with the scrolling row and out of clipped areas.
+                                    shuffle.anchor = bounds.center.takeIf { bounds.height >= coordinates.size.height - .5f }
+                                })
                             }
                         }
                     }
