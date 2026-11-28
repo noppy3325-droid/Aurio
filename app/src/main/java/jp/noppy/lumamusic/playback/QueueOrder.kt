@@ -14,6 +14,9 @@ internal val addQueueItemCommand by lazy {
 internal val anchoredSkipCommand by lazy {
     SessionCommand("jp.noppy.lumamusic.QUEUE_SKIP", Bundle.EMPTY)
 }
+internal val saveForUpdateCommand by lazy {
+    SessionCommand("jp.noppy.lumamusic.SAVE_FOR_UPDATE", Bundle.EMPTY)
+}
 
 /** A swipe previews a particular destination. An automatic transition can invalidate it. */
 internal data class SkipAnchor(val from: Int, val fromId: String, val to: Int, val toId: String) {

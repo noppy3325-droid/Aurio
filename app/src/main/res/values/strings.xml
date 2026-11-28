@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Aurio</string>
+    <string name="app_name" translatable="false">Aurio</string>
     <string name="icon_settings">アプリアイコン</string>
     <string name="icon_rose">ローズ（標準）</string>
     <string name="icon_sapphire">サファイア</string>

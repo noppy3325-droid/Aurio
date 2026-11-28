@@ -1,0 +1,101 @@
+name: Release preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable release tag (for example, v1.5.0)
+        required: true
+        type: string
+      previous_version_code:
+        description: Highest versionCode already distributed
+        required: true
+        default: "33"
+        type: string
+      source_run_id:
+        description: Successful Actions run ID in this repository with the staged APK and update.json
+        required: true
+        type: string
+      artifact_name:
+        description: Exact name of the staged Actions artifact
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      PREVIOUS_VERSION_CODE: ${{ inputs.previous_version_code }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Download staged artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$PREVIOUS_VERSION_CODE" =~ ^[1-9][0-9]{0,9}$ ]]
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$ARTIFACT_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+
+          run_api="repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID"
+          gh api "$run_api" | jq -e --arg repo "$GITHUB_REPOSITORY" \
+            '.head_repository.full_name == $repo and .status == "completed" and .conclusion == "success"' > /dev/null
+
+          artifact_id="$(gh api --paginate "$run_api/artifacts?per_page=100" | jq -ser --arg name "$ARTIFACT_NAME" '
+            [.[].artifacts[] | select(.name == $name)] |
+            if length != 1 then error("Expected exactly one artifact with the specified name")
+            elif .[0].expired or (.[0].size_in_bytes <= 0 or .[0].size_in_bytes > 2149580800)
+            then error("The artifact is expired, empty or too large")
+            else .[0].id end
+          ')"
+          [[ "$artifact_id" =~ ^[1-9][0-9]{0,19}$ ]]
+          mkdir "$RUNNER_TEMP/aurio-preflight"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
+            > "$RUNNER_TEMP/aurio-preflight/artifact.zip"
+      - name: Extract APK and update.json
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import shutil
+          import zipfile
+          from pathlib import Path
+
+          directory = Path(os.environ["RUNNER_TEMP"]) / "aurio-preflight"
+          apk = f"Aurio-{os.environ['RELEASE_TAG'][1:]}.apk"
+          size_limits = {apk: 2 * 1024**3 - 1, "update.json": 64 * 1024}
+          with zipfile.ZipFile(directory / "artifact.zip") as archive:
+              members = archive.infolist()
+              if len(members) != len(size_limits) or set(archive.namelist()) != size_limits.keys():
+                  raise SystemExit("The artifact must contain exactly the expected APK and update.json at its root")
+              for entry in members:
+                  if not 0 < entry.file_size <= size_limits[entry.filename]:
+                      raise SystemExit("An asset is empty or exceeds the size limit")
+                  with archive.open(entry) as source, (directory / entry.filename).open("xb") as destination:
+                      shutil.copyfileobj(source, destination)
+          PY
+      - name: Set up Android SDK Build Tools
+        shell: bash
+        run: |
+          if [[ ! -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" ]]; then
+            sdkmanager --install "build-tools;36.0.0"
+          fi
+      - name: Verify APK and metadata
+        shell: pwsh
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP 'aurio-preflight'
+          $apkName = "Aurio-$($env:RELEASE_TAG.Substring(1)).apk"
+          ./scripts/Test-ReleaseApk.ps1 -ApkPath (Join-Path $directory $apkName) `
+            -Tag $env:RELEASE_TAG -ManifestPath (Join-Path $directory 'update.json') `
+            -PreviousVersionCode $env:PREVIOUS_VERSION_CODE

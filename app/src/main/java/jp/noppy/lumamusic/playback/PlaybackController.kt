@@ -12,11 +12,14 @@ import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import jp.noppy.lumamusic.data.Track
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
 data class PlaybackUi(
@@ -129,6 +132,17 @@ class PlaybackController(context: Context, scope: CoroutineScope) {
 
     private fun connectedPlayer(): MediaController? = controller?.takeIf { it.isConnected }
 
+    internal suspend fun saveForUpdate() {
+        val request = withContext(Dispatchers.Main.immediate) {
+            val player = checkNotNull(connectedPlayer())
+            check(player.availableSessionCommands.contains(saveForUpdateCommand))
+            player.sendCustomCommand(saveForUpdateCommand, Bundle.EMPTY)
+        }
+        withContext(Dispatchers.IO) {
+            check(request.get(8, TimeUnit.SECONDS).resultCode == androidx.media3.session.SessionResult.RESULT_SUCCESS)
+        }
+    }
+
     /** Reopening the current item from browsing is independent of the visible list's order. */
     fun playFromBrowse(tracks: List<Track>, index: Int): Boolean {
         val target = tracks.getOrNull(index) ?: return false
@@ -156,7 +170,8 @@ class PlaybackController(context: Context, scope: CoroutineScope) {
         // Multiple taps before the player opens should not replace the new queue again.
         if (lastQuickShuffleAt?.let { now - it < 350L } == true) return true
         if (!play(tracks, random.nextInt(tracks.size), shuffle = tracks.size > 1)) return false
-        lastQuickShuffleAt = now
+        // Queue construction can take longer than the tap guard for a large library.
+        lastQuickShuffleAt = SystemClock.elapsedRealtime()
         return true
     }
 

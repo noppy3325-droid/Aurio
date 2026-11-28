@@ -77,7 +77,10 @@ internal class PlaybackShuffle(private val player: ExoPlayer) {
     fun checkpoint(nowMillis: Long): SmartShuffleCheckpoint = cycle.checkpoint(nowMillis)
 
     fun beforePlay() {
-        if (player.shuffleModeEnabled && player.playbackState == Player.STATE_ENDED) {
+        if (!player.shuffleModeEnabled) return
+        // Apply a newly queued shuffle before the engine starts consuming the timeline.
+        update()
+        if (player.playbackState == Player.STATE_ENDED) {
             val next = player.currentTimeline.getFirstWindowIndex(true)
             if (cycle.roundReady && next in 0 until player.mediaItemCount && next != player.currentMediaItemIndex) {
                 player.seekToDefaultPosition(next)

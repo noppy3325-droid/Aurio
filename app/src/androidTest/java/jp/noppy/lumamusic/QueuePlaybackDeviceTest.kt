@@ -91,6 +91,13 @@ class QueuePlaybackDeviceTest {
             await("Three context items prepared at the requested position") {
                 ui.state.value.queue.size == 3 && observer.playbackState == Player.STATE_READY && observer.currentPosition == 4200L
             }
+            runBlocking {
+                ui.saveForUpdate()
+                val saved = app.settings.snapshot.first()
+                assertEquals(tracks.take(3).map(Track::uri), saved.uris)
+                assertEquals(1, saved.index)
+                assertEquals(4200L, saved.position)
+            }
             main { ui.playFromBrowse(listOf(tracks[1]), 0) }
             instrumentation.waitForIdleSync()
             await("Opening the current song keeps its paused position and its existing queue") {
@@ -301,10 +308,18 @@ class QueuePlaybackDeviceTest {
             await("All ten tracks finish with Repeat Off") {
                 observer.playbackState == Player.STATE_ENDED && observer.mediaItemCount == tracks.size
             }
+            val checkpoint = runBlocking {
+                withTimeout(5_000) {
+                    app.settings.snapshot.first { snapshot ->
+                        snapshot.uris == tracks.map(Track::uri) && snapshot.shuffleCheckpoint?.roundReady == true
+                    }.shuffleCheckpoint
+                }
+            }
+            assertEquals(tracks.indices.toSet(), checkpoint?.visited?.toSet())
             main {
                 val round = played.filter { id -> tracks.any { it.uri == id } }
                 assertEquals(first, round.first())
-                assertEquals(tracks.size, round.size)
+                assertEquals("MediaController transitions compared with the completed service checkpoint", tracks.size, round.size)
                 assertEquals(tracks.map(Track::uri).toSet(), round.toSet())
                 assertEquals(tracks.map(Track::uri), List(observer.mediaItemCount) { observer.getMediaItemAt(it).mediaId })
                 observer.removeListener(listener)

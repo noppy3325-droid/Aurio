@@ -23,6 +23,10 @@ class LumaViewModel(application: Application) : AndroidViewModel(application) {
     val library = app.library
     val settings = app.settings
     val playback = PlaybackController(app, viewModelScope)
+    internal val updates get() = app.updates
+    internal val updateRequested = MutableStateFlow(false)
+    internal val updateNotice = updates.state.map { it.noticeVersion }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     val playbackSummary = playback.state.map { it.copy(position = 0L) }.distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PlaybackUi())
     val tracks = library.tracks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

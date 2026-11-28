@@ -6,11 +6,12 @@ android {
         applicationId = "jp.noppy.lumamusic"
         minSdk = 29
         targetSdk = 37
-        versionCode = 33
-        versionName = "1.4.0"
+        versionCode = 34
+        versionName = "1.5.0"
+        buildConfigField("String", "UPDATE_REPOSITORY", "\"noppy3325-droid/Aurio\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     testOptions { unitTests.isReturnDefaultValues = true }
 }
@@ -37,6 +38,8 @@ dependencies {
     implementation("androidx.room:room-ktx:2.8.5")
     ksp("androidx.room:room-compiler:2.8.5")
     implementation("androidx.datastore:datastore-preferences:1.3.0")
+    implementation("androidx.work:work-runtime:2.12.0")
+    implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("io.coil-kt.coil3:coil-compose:3.6.3")
     implementation("androidx.palette:palette-ktx:1.1.0")

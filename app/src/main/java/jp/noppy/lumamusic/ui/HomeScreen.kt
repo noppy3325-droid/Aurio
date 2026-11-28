@@ -20,11 +20,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import jp.noppy.lumamusic.R
 import jp.noppy.lumamusic.data.*
 import kotlinx.coroutines.flow.first
 
 @Composable
-internal fun HomeScreen(vm: LumaViewModel, tracks: List<Track>, users: List<UserTrack>, playlists: List<MusicPlaylist>, addFolder: () -> Unit, openPlayer: () -> Unit, bottomContentPadding: Dp, active: Boolean) {
+internal fun HomeScreen(vm: LumaViewModel, tracks: List<Track>, users: List<UserTrack>, playlists: List<MusicPlaylist>, addFolder: () -> Unit, openPlayer: () -> Unit, bottomContentPadding: Dp, active: Boolean, updateVersion: String?, openUpdate: () -> Unit) {
     val history by vm.history.collectAsStateWithLifecycle()
     val playback by vm.playbackSummary.collectAsStateWithLifecycle()
     val recommendations by vm.homeFeed.collectAsStateWithLifecycle()
@@ -90,6 +92,13 @@ internal fun HomeScreen(vm: LumaViewModel, tracks: List<Track>, users: List<User
                     Spacer(Modifier.width(6.dp))
                     Text("再生記録")
                 }
+            }
+        }
+        if (updateVersion != null) item(key = "software_update") {
+            TextButton(openUpdate, Modifier.padding(horizontal = LumaSpacing.Page)) {
+                Icon(Icons.Rounded.SystemUpdate, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.update_available_short, updateVersion))
             }
         }
         if (tracks.isEmpty() || displayedFeed.ready && featured.isEmpty()) {

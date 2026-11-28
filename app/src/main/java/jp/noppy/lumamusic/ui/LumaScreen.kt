@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
@@ -41,8 +42,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import jp.noppy.lumamusic.data.Preferences
+import jp.noppy.lumamusic.R
 import jp.noppy.lumamusic.data.Track
 import jp.noppy.lumamusic.playback.PlaybackUi
+import jp.noppy.lumamusic.update.InstallState
 import jp.noppy.lumamusic.ui.audio.SoundSettingsScreen
 import jp.noppy.lumamusic.ui.audio.AudioOutputPanel
 import kotlinx.coroutines.Job
@@ -63,6 +66,8 @@ import kotlin.math.roundToInt
     val output by vm.output.collectAsStateWithLifecycle()
     val scan by vm.scan.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
+    val updateNotice by vm.updateNotice.collectAsStateWithLifecycle()
+    val installState by vm.updates.installer.state.collectAsStateWithLifecycle()
     val selected = remember(tracks, playback.mediaId) { tracks.find { it.uri == playback.mediaId } }
     LaunchedEffect(selected?.uri, selected?.size, selected?.modified, selected?.detailState) { selected?.uri?.let { vm.ensureDetails(it) } }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> uri?.let(vm::addFolder) }
@@ -75,12 +80,29 @@ import kotlin.math.roundToInt
     val playerVisible = playback.mediaId != null && sheet.active
     val playerCoversBars by remember(sheet) { derivedStateOf { sheet.progress > .92f } }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showUpdate by rememberSaveable { mutableStateOf(false) }
     var showSound by rememberSaveable { mutableStateOf(false) }
     var showOutput by remember { mutableStateOf(false) }
     var dockHeightPx by remember { mutableIntStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(vm) {
         vm.feedback.collectLatest { snackbar.showSnackbar(it, duration = SnackbarDuration.Short) }
+    }
+    LaunchedEffect(vm) {
+        vm.updateRequested.collect { requested ->
+            if (requested) {
+                standby.exit()
+                showUpdate = true
+                vm.updateRequested.value = false
+            }
+        }
+    }
+    val installSuccess = stringResource(R.string.update_installed, vm.updates.currentVersion)
+    LaunchedEffect(installState) {
+        if (installState is InstallState.Succeeded) {
+            snackbar.showSnackbar(installSuccess, duration = SnackbarDuration.Short)
+            vm.updates.installer.dismissResult()
+        }
     }
     val tabState = rememberSaveableStateHolder()
     val navigationScope = rememberCoroutineScope()
@@ -152,7 +174,7 @@ import kotlin.math.roundToInt
         val dark = scheme.background == LumaColors.Dark
         val activity = LocalActivity.current
         val view = LocalView.current
-        val darkSystemBars = dark || (playerVisible && playerCoversBars && !showSound && !showSettings) || standby.active
+        val darkSystemBars = dark || (playerVisible && playerCoversBars && !showSound && !showSettings && !showUpdate) || standby.active
         SideEffect {
             activity?.window?.let { window ->
                 WindowCompat.getInsetsController(window, view).apply {
@@ -164,8 +186,9 @@ import kotlin.math.roundToInt
         CompositionLocalProvider(LocalGlassQuality provides quality, LocalReducedMotion provides reducedMotion, LocalContentColor provides scheme.onBackground) {
             Box(Modifier.fillMaxSize().background(scheme.background)) {
                 // Register before child routes so detail/dialog back handlers take precedence.
-                BackHandler(showSound || standby.armed || showSettings || playerVisible || pager.settledPage != 0) {
+                BackHandler(showUpdate || showSound || standby.armed || showSettings || playerVisible || pager.settledPage != 0) {
                     when {
+                        showUpdate -> showUpdate = false
                         showSound -> showSound = false
                         standby.armed -> standby.exit()
                         showSettings -> showSettings = false
@@ -174,6 +197,9 @@ import kotlin.math.roundToInt
                     }
                 }
                 when {
+                    showUpdate -> Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+                        UpdateScreen(vm.updates, vm.playback::saveForUpdate) { showUpdate = false }
+                    }
                     showSound -> Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                         SoundSettingsScreen(vm, onOutput = { showOutput = true }) { showSound = false }
                     }
@@ -182,7 +208,8 @@ import kotlin.math.roundToInt
                         prefs, standby, { showOutput = true }, openSound, output.bitPerfectVolumeRestricted,
                     )
                     showSettings -> Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
-                        SettingsScreen(vm, prefs, folders, { picker.launch(null) }, { showOutput = true }, openSound, { showSettings = false })
+                        SettingsScreen(vm, prefs, folders, { picker.launch(null) }, { showOutput = true }, openSound,
+                            updates = { showUpdate = true }, close = { showSettings = false })
                     }
                     else -> {
                         val bottomContentPadding = with(LocalDensity.current) { dockHeightPx.toDp() } + LumaDock.ListClearance
@@ -201,7 +228,8 @@ import kotlin.math.roundToInt
                                 tabState.SaveableStateProvider(tab) {
                                     val active = !playerVisible && pager.settledPage == index
                                     if (tab == "home") {
-                                        HomeScreen(vm, tracks, users, playlists, { picker.launch(null) }, openPlayer, bottomContentPadding, active)
+                                        HomeScreen(vm, tracks, users, playlists, { picker.launch(null) }, openPlayer,
+                                            bottomContentPadding, active, updateNotice) { showUpdate = true }
                                     } else if (tab == "search") {
                                         SearchScreen(
                                             vm, tracks, folders, users, playlists, entries, { picker.launch(null) }, openPlayer,
@@ -269,7 +297,7 @@ import kotlin.math.roundToInt
                         }
                     }
                 }
-                val browsing = !showSound && !showSettings && !standby.active && !playerVisible
+                val browsing = !showSound && !showSettings && !showUpdate && !standby.active && !playerVisible
                 val feedbackPosition = Modifier.align(Alignment.BottomCenter).imePadding()
                 SnackbarHost(
                     snackbar,

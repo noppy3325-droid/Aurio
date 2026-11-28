@@ -247,7 +247,7 @@ class PlaybackService : MediaSessionService() {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             if (!isOwnController(controller)) return super.onConnect(session, controller)
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                .add(addQueueItemCommand).add(anchoredSkipCommand).build()
+                .add(addQueueItemCommand).add(anchoredSkipCommand).add(saveForUpdateCommand).build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
                 .setAvailableSessionCommands(commands)
                 .build()
@@ -260,10 +260,31 @@ class PlaybackService : MediaSessionService() {
             args: Bundle,
         ): ListenableFuture<SessionResult> {
             val action = customCommand.customAction
-            if (action != addQueueItemCommand.customAction && action != anchoredSkipCommand.customAction) {
+            if (action != addQueueItemCommand.customAction && action != anchoredSkipCommand.customAction &&
+                action != saveForUpdateCommand.customAction
+            ) {
                 return super.onCustomCommand(session, controller, customCommand, args)
             }
             if (!isOwnController(controller)) return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+            if (action == saveForUpdateCommand.customAction) {
+                if (!restored && player.mediaItemCount == 0) {
+                    return Futures.immediateFuture(SessionResult(SessionError.ERROR_INVALID_STATE))
+                }
+                val value = snapshot()
+                val saved = SettableFuture.create<SessionResult>()
+                val job = scope.launch {
+                    try {
+                        app.settings.saveSnapshot(value)
+                        saved.set(SessionResult(SessionResult.RESULT_SUCCESS))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        saved.set(SessionResult(SessionError.ERROR_IO))
+                    }
+                }
+                job.invokeOnCompletion { if (!saved.isDone) saved.cancel(false) }
+                return saved
+            }
             if (action == anchoredSkipCommand.customAction) {
                 val anchor = SkipAnchor.read(args)
                 val moved = anchor != null && transport.navigate(args.getBoolean("forward"), anchor)

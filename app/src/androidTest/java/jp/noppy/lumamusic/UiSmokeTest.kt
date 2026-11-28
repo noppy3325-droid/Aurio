@@ -33,6 +33,8 @@ import jp.noppy.lumamusic.data.stableTrackId
 import jp.noppy.lumamusic.playback.PlaybackService
 import jp.noppy.lumamusic.playback.mediaItem
 import jp.noppy.lumamusic.ui.StandbyController
+import jp.noppy.lumamusic.update.CheckPhase
+import jp.noppy.lumamusic.update.OpenAurioUpdate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -187,6 +189,51 @@ class UiSmokeTest {
     private fun tabSelected(label: String): Boolean = nodes().any { node ->
         if (node.text?.toString() != label && node.contentDescription?.toString() != label) return@any false
         generateSequence(node) { it.parent }.take(4).any { it.isSelected }
+    }
+
+    @Test fun softwareUpdateOpensFromSettingsAndFromItsNotificationRoute() = runBlocking {
+        val updates = app.updates
+        val original = app.settings.preferences.first()
+        val title = context.getString(R.string.update_title)
+        val check = context.getString(R.string.update_check)
+        var activity: Activity? = null
+        try {
+            app.settings.text("theme", "light")
+            app.settings.text("glassQuality", "BALANCED")
+            val intent = Intent(context, AurioActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            val settingsActivity = instrumentation.startActivitySync(intent)
+            activity = settingsActivity
+            click("ライブラリ", tab = true)
+            click("設定")
+            screenshot("v150-settings-light")
+            click(title)
+            eventually("manual update check is available") { textPresent(check) }
+            assertTrue(textPresent(context.getString(R.string.update_current, updates.currentVersion)))
+            screenshot("v150-updates-light")
+
+            if (InstrumentationRegistry.getArguments().getString("liveReleaseCheck") == "true") {
+                click(check)
+                eventually("manual check returns a release or a network error", seconds = 40) {
+                    updates.state.value.check in setOf(CheckPhase.Available, CheckPhase.UpToDate, CheckPhase.Failed)
+                }
+                val result = updates.state.value
+                android.util.Log.i("AurioUpdateQA", "manual GitHub check status=${result.check} latest=${result.latestVersion} checked=${result.lastChecked} error=${result.checkProblem}")
+                assertTrue("The public GitHub API check should succeed", result.lastChecked > 0 && result.check != CheckPhase.Failed)
+            }
+
+            main { settingsActivity.finish() }
+            activity = instrumentation.startActivitySync(intent.setAction(OpenAurioUpdate))
+            eventually("notification opens update details") { textPresent(title) && textPresent(check) }
+            app.settings.text("theme", "dark")
+            app.settings.text("glassQuality", "REDUCED")
+            screenshot("v150-updates-dark-reduced")
+            app.settings.text("glassQuality", "OFF")
+            screenshot("v150-updates-dark-off")
+        } finally {
+            activity?.let { current -> main { current.finish() } }
+            app.settings.text("theme", original.theme)
+            app.settings.text("glassQuality", original.glassQuality)
+        }
     }
 
     @Test fun opensListeningRecordsAndSwitchesRankingAndHistory() = runBlocking {

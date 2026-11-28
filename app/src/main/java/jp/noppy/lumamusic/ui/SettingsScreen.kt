@@ -12,18 +12,27 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 
 import androidx.compose.ui.unit.dp
 
 import jp.noppy.lumamusic.core.OutputMode
 import jp.noppy.lumamusic.data.*
+import jp.noppy.lumamusic.R
 
-@Composable fun SettingsScreen(vm: LumaViewModel, prefs: Preferences, folders: List<MusicFolder>, addFolder: () -> Unit, output: () -> Unit, sound: () -> Unit = {}, close: () -> Unit = {}) {
+@Composable fun SettingsScreen(vm: LumaViewModel, prefs: Preferences, folders: List<MusicFolder>, addFolder: () -> Unit, output: () -> Unit, sound: () -> Unit = {}, updates: () -> Unit = {}, close: () -> Unit = {}) {
     val context = LocalContext.current
     var warning by remember { mutableStateOf(false) }
     val version = remember(context) { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrDefault("0.20") }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) { IconButton(close) { Icon(Icons.Rounded.ArrowBack, "ライブラリに戻る") }; Text("設定", style = MaterialTheme.typography.headlineLarge) }
+        SettingsGroup {
+            TextButton(updates) {
+                Icon(Icons.Rounded.SystemUpdate, null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.update_title))
+            }
+        }
         SettingsGroup { Text("サウンド", style = MaterialTheme.typography.titleLarge); TextButton(sound) { Icon(Icons.Rounded.Equalizer, null); Spacer(Modifier.width(8.dp)); Text("Aurio Enhance / Direct") }; Text("音質補正、イコライザー、音量の均一化を調整します。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
         SettingsGroup { Text("音声出力", style = MaterialTheme.typography.titleLarge); TextButton(output) { Icon(Icons.Rounded.SpeakerGroup, null); Spacer(Modifier.width(8.dp)); Text("出力先を切り替え") }
             listOf(OutputMode.STANDARD to "通常再生", OutputMode.USB_HIGH_QUALITY to "USBの形式一致を優先", OutputMode.BIT_PERFECT to "ビットパーフェクトを試行").forEach { (mode, title) ->

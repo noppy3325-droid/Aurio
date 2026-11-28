@@ -20,6 +20,8 @@ class UpgradeDataDeviceTest {
     @Suppress("DEPRECATION")
     @Test fun existingRowsAndSettingsSurviveAnInPlaceUpgrade() = runBlocking<Unit> {
         val phase = InstrumentationRegistry.getArguments().getString("upgradePhase")
+        val fromVersion = InstrumentationRegistry.getArguments().getString("upgradeFrom")?.toLong() ?: 32
+        val toVersion = InstrumentationRegistry.getArguments().getString("upgradeTo")?.toLong() ?: 33
         assumeTrue(phase == "seed" || phase == "check")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val app = context.applicationContext as LumaApp
@@ -29,7 +31,7 @@ class UpgradeDataDeviceTest {
         val grants = context.contentResolver.persistedUriPermissions.sortedBy { it.uri.toString() }
             .map { "${it.uri} ${it.isReadPermission} ${it.isWritePermission}" }
         if (phase == "seed") {
-            assertEquals(32L, version)
+            assertEquals(fromVersion, version)
             check(!file.exists()) { "A previous upgrade fixture must be checked first" }
             val id = UUID.randomUUID().toString()
             val uri = "aurio-upgrade-qa:$id"
@@ -42,7 +44,7 @@ class UpgradeDataDeviceTest {
             file.writeText((listOf(id, previousMotion.toString()) + grants).joinToString("\n"))
             Log.i("AurioUpgradeQA", "seeded version=$version persistedGrants=${grants.size}")
         } else {
-            assertEquals(33L, version)
+            assertEquals(toVersion, version)
             val saved = file.readLines()
             val id = saved[0]
             val uri = "aurio-upgrade-qa:$id"

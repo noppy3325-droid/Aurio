@@ -7,9 +7,11 @@
 | AndroidX Compose BOM | 2026.09.00 | Apache-2.0 |
 | AndroidX Activity | 1.13.0 | Apache-2.0 |
 | AndroidX Lifecycle | 2.11.0 | Apache-2.0 |
-| AndroidX Media3 | 1.11.1 | Apache-2.0 |
+| AndroidX Media3 | 1.12.0-rc01 | Apache-2.0 |
 | AndroidX Room | 2.8.5 | Apache-2.0 |
 | AndroidX DataStore | 1.3.0 | Apache-2.0 |
+| AndroidX WorkManager | 2.12.0 | Apache-2.0 |
+| Gson | 2.11.0 | Apache-2.0 |
 | AndroidX DocumentFile | 1.1.0 | Apache-2.0 |
 | AndroidX Palette | 1.1.0 | Apache-2.0 |
 | Material Icons Extended | 1.7.8 | Apache-2.0 |

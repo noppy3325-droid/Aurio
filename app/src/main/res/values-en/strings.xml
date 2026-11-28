@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="icon_settings">App icon</string>
+    <string name="icon_rose">Rose (default)</string>
+    <string name="icon_sapphire">Sapphire</string>
+    <string name="icon_jade">Jade</string>
+    <string name="icon_amethyst">Amethyst</string>
+    <string name="icon_change_failed">Could not change the app icon. Try again.</string>
+</resources>
