@@ -62,7 +62,14 @@ import jp.noppy.lumamusic.R
             ToggleRow("暗所向け表示", prefs.darkStandby) { vm.action { vm.settings.boolean("night", it) } }
             ToggleRow("時計を表示", prefs.clock) { vm.action { vm.settings.boolean("clock", it) } }
             ToggleRow("歌詞を表示", prefs.standbyLyrics) { vm.action { vm.settings.boolean("standbyLyrics", it) } }
-            Text("スタンバイ画面の明るさ"); LumaSlider(prefs.brightness, { vm.action { vm.settings.number("brightness", it) } }, range = .02f..1f, label = "スタンバイ画面の明るさ")
+            ToggleRow(stringResource(R.string.standby_fixed_brightness), prefs.standbyFixedBrightness) {
+                vm.action { vm.settings.boolean("standbyFixedBrightness", it) }
+            }
+            if (prefs.standbyFixedBrightness) {
+                Text("スタンバイ画面の明るさ")
+                LumaSlider(prefs.brightness, { vm.action { vm.settings.number("brightness", it) } },
+                    range = .02f..1f, label = "スタンバイ画面の明るさ")
+            }
             Text("前面表示中だけ有効です。低輝度と微小な位置移動で焼き付きを軽減します。", style = MaterialTheme.typography.bodySmall)
         }
         SettingsGroup { Text("システムとの連携", style = MaterialTheme.typography.titleLarge)

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="standby_fixed_brightness">Set a fixed brightness in StandBy</string>
+</resources>

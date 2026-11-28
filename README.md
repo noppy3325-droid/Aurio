@@ -80,6 +80,8 @@ Android SDKの場所を `local.properties` に設定し、プロジェクトの�
 
 Windowsでは `./gradlew` の代わりに `gradlew.bat` を使います。デバッグAPKは `app/build/outputs/apk/debug/` に出力されます。`assembleRelease` は署名前のAPKを生成します。
 
+横置きスタンバイのv1.8.0での変更内容は[検証記録](docs/VERIFICATION-v1.8.0.md)をご覧ください。
+
 描画とタブ操作の検証は[1.1.0の検証記録](docs/VERIFICATION-v1.1.0.md)、描画とシャッフルの検証は[1.0.0の検証記録](docs/VERIFICATION-v1.0.0.md)をご覧ください。
 
 ## ライセンス

@@ -6,8 +6,8 @@ android {
         applicationId = "jp.noppy.lumamusic"
         minSdk = 29
         targetSdk = 37
-        versionCode = 35
-        versionName = "1.6.0"
+        versionCode = 37
+        versionName = "1.8.0"
         buildConfigField("String", "UPDATE_REPOSITORY", "\"noppy3325-droid/Aurio\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

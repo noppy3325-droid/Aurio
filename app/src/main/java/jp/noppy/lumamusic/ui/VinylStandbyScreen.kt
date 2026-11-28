@@ -1,8 +1,9 @@
 package jp.noppy.lumamusic.ui
 
-import android.view.WindowManager
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.LocalActivity
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -51,9 +52,13 @@ internal fun VinylStandbyScreen(
     var panel by rememberSaveable { mutableStateOf("player") }
     var menu by remember { mutableStateOf(false) }
     val live = vm.playback.state.collectAsStateWithLifecycle()
-    val preview = remember(playback.mediaId, playback.index) { mutableStateOf<Long?>(null) }
-    val artwork = rememberPlayerArtwork(track?.artwork ?: playback.artwork)
+    val currentTrack = track?.takeIf { it.uri == playback.mediaId }
+    val artwork = rememberPlayerArtwork(currentTrack?.artwork ?: playback.artwork)
     val colors = artworkPlayerColors(artwork)
+    val reduced = LocalReducedMotion.current
+    val base by animateColorAsState(
+        colors.background, animationSpec = if (reduced) snap() else tween(300), label = "standby artwork color",
+    )
     BackHandler(panel != "player") { panel = "player" }
 
     LaunchedEffect(resumed, prefs.dimAfter) {
@@ -71,16 +76,21 @@ internal fun VinylStandbyScreen(
             minute++
         }
     }
-    StandbyWindow(resumed, prefs.keepAwake, if (dimmed) .02f else prefs.brightness)
+    val brightness = when {
+        dimmed -> .02f
+        prefs.standbyFixedBrightness -> prefs.brightness
+        else -> null
+    }
+    StandbyWindow(prefs.keepAwake, brightness)
 
     MaterialTheme(colorScheme = colors) {
         CompositionLocalProvider(LocalContentColor provides colors.onSurface) {
             LiquidBackdropHost(
                 Modifier.fillMaxSize(),
-                content = { StandbyArtworkBackground(artwork, colors.background) },
+                content = { StandbyArtworkBackground(artwork, base) },
                 overlay = {
                     BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                        val leftWeight = if (maxWidth < 570.dp) .46f else .49f
+                        val leftWeight = if (maxWidth < 570.dp) .42f else .49f
                         val gap = if (maxWidth < 570.dp) 12.dp else 24.dp
                         Row(
                             Modifier.fillMaxSize().offset(x = (minute % 3 - 1).dp, y = ((minute / 3) % 3 - 1).dp),
@@ -89,13 +99,12 @@ internal fun VinylStandbyScreen(
                         ) {
                             Box(Modifier.weight(leftWeight).fillMaxHeight().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
                                 when (panel) {
-                                    "lyrics" -> LiveLyricsPanel(vm, track, Modifier.fillMaxSize())
+                                    "lyrics" -> LiveLyricsPanel(vm, currentTrack, Modifier.fillMaxSize())
                                     "queue" -> QueuePanel(vm, playback, Modifier.fillMaxSize())
                                     else -> VinylTurntable(
-                                        artwork = artwork, title = track?.title ?: playback.title,
-                                        playback = playback, live = live, preview = preview, resumed = resumed,
+                                        artwork = artwork, title = currentTrack?.title ?: playback.title,
+                                        playback = playback, resumed = resumed,
                                         toggle = vm.playback::toggle,
-                                        seek = { vm.playback.seek(it, playback.mediaId, playback.index) },
                                     )
                                 }
                             }
@@ -124,10 +133,10 @@ internal fun VinylStandbyScreen(
                                     verticalArrangement = Arrangement.Center,
                                 ) {
                                     SharedPlayerControls(
-                                        vm, playback, track, favorite, compact = true, bitPerfect,
-                                        panel, setPanel = { panel = it }, output, sound, seekPreview = preview,
+                                        vm, playback, currentTrack, favorite, compact = true, bitPerfect,
+                                        panel, setPanel = { panel = it }, output, sound,
                                     )
-                                    if (prefs.standbyLyrics && panel != "lyrics") StandbyLyric(vm, track, live)
+                                    if (prefs.standbyLyrics && panel != "lyrics") StandbyLyric(vm, currentTrack, live)
                                 }
                             }
                         }
@@ -137,26 +146,6 @@ internal fun VinylStandbyScreen(
                     }
                 },
             )
-        }
-    }
-}
-
-@Composable
-private fun StandbyWindow(resumed: Boolean, keepAwake: Boolean, brightness: Float) {
-    val window = LocalActivity.current?.window ?: return
-    DisposableEffect(window, resumed, keepAwake, brightness) {
-        val oldBrightness = window.attributes.screenBrightness
-        val keepOn = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-        val wasKeptOn = window.attributes.flags and keepOn != 0
-        if (resumed) {
-            if (keepAwake) window.addFlags(keepOn)
-            window.attributes = window.attributes.apply { screenBrightness = brightness }
-        }
-        onDispose {
-            if (resumed) {
-                if (!wasKeptOn) window.clearFlags(keepOn)
-                window.attributes = window.attributes.apply { screenBrightness = oldBrightness }
-            }
         }
     }
 }

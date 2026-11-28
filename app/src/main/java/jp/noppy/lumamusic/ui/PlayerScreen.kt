@@ -185,7 +185,6 @@ internal fun SharedPlayerControls(
     setPanel: (String) -> Unit,
     output: () -> Unit,
     sound: () -> Unit,
-    seekPreview: State<Long?>? = null,
 ) {
     val title = track?.title ?: playback.title
     val artist = track?.artist ?: playback.artist
@@ -210,7 +209,7 @@ internal fun SharedPlayerControls(
             tint = if (favorite) playerColors.primary else Color.White,
         )
     }
-    SeekControls(vm, compact = true, artworkBackdrop = true, seekPreview = seekPreview)
+    SeekControls(vm, compact = true, artworkBackdrop = true)
     PlaybackButtons(vm, playback, compact = compact)
     VolumeControl(bitPerfect = bitPerfect)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -268,15 +267,15 @@ internal fun PlayerGlassButton(
     }
 }
 
-@Composable internal fun SeekControls(vm: LumaViewModel, compact: Boolean = false, artworkBackdrop: Boolean = false, seekPreview: State<Long?>? = null) {
+@Composable internal fun SeekControls(vm: LumaViewModel, compact: Boolean = false, artworkBackdrop: Boolean = false) {
     val live by vm.playback.state.collectAsStateWithLifecycle()
     var dragged by remember(live.mediaId, live.index) { mutableStateOf<Float?>(null) }
     val duration = live.duration.toFloat().coerceAtLeast(1f)
-    val position = (dragged ?: seekPreview?.value?.toFloat() ?: live.position.toFloat()).coerceIn(0f, duration)
+    val position = (dragged ?: live.position.toFloat()).coerceIn(0f, duration)
     val slider: @Composable () -> Unit = {
         key(live.mediaId, live.index) {
             LumaSlider(
-                position, { dragged = it }, range = 0f..duration, enabled = live.canSeek && seekPreview?.value == null,
+                position, { dragged = it }, range = 0f..duration, enabled = live.canSeek,
                 trackAlpha = if (artworkBackdrop && live.duration > 0) .48f else .20f,
                 showThumb = artworkBackdrop,
                 onFinished = { dragged?.let { vm.playback.seek(it.toLong(), live.mediaId, live.index) }; dragged = null }

@@ -912,30 +912,17 @@ class UiSmokeTest {
             eventually("landscape") { context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE }
             Thread.sleep(700)
             screenshot("13-player-landscape")
-            // Exercise the app's orientation callback, without changing global rotation/security settings.
             main {
-                val field = AurioActivity::class.java.getDeclaredField("standby").apply { isAccessible = true }
-                val standby = field.get(activity) as StandbyController
+                val standby = standbyController(activity!!)
                 if (!standby.armed) standby.arm()
-                val sensorField = StandbyController::class.java.getDeclaredField("sensor").apply { isAccessible = true }
-                val sensor = sensorField.get(standby) as OrientationEventListener
-                sensor.onOrientationChanged(270)
-                sensor.disable() // Deterministic callback test; do not let the phone's real desk angle exit it.
+                driveStandbyOrientation(standby, 270)
             }
             eventually("standby route") { textPresent("スタンバイを終了") }
             screenshot("14-standby-landscape")
-            val testArguments = InstrumentationRegistry.getArguments()
-            val record = if (testArguments.getString("recordVinyl") == "true") {
-                instrumentation.uiAutomation.executeShellCommand(
-                    "screenrecord --time-limit 14 --size 1200x540 /data/local/tmp/aurio-v130-vinyl.mp4",
-                )
-            } else null
-            try {
-                if (record != null) Thread.sleep(1200)
+            withVinylRecording {
                 exerciseVinylStandby(activity, player)
-                testArguments.getString("vinylSoakSeconds")?.toLongOrNull()?.let { soakVinylStandby(player, it) }
-            } finally {
-                record?.close()
+                InstrumentationRegistry.getArguments().getString("vinylSoakSeconds")
+                    ?.toLongOrNull()?.let { soakVinylStandby(player, it) }
             }
             click("スタンバイを終了")
             main { assertNull(player.playerError) }
@@ -972,6 +959,143 @@ class UiSmokeTest {
         }
     }
 
+    @Test fun vinylStandbyUsesSharedSeekAndRestoresPortrait() = runBlocking {
+        val originalSnapshot = app.settings.snapshot.first()
+        val id = UUID.randomUUID().toString()
+        val directory = File(context.filesDir, "vinyl-fixture-$id").apply { mkdirs() }
+        var activity: Activity? = null
+        var originalOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        var restorePlayer: (() -> Unit)? = null
+        var future: com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
+        try {
+            val fixtureTracks = fixture(directory, artworkMatrix = true).second
+            val tracks = (fixtureTracks.take(2) + fixtureTracks.last()).map { it.copy(title = "Vinyl QA ${it.title}") }
+            main { future = MediaController.Builder(context, SessionToken(context, ComponentName(context, PlaybackService::class.java))).buildAsync() }
+            val player = future!!.get(15, TimeUnit.SECONDS)
+            main {
+                val queue = (0 until player.mediaItemCount).map(player::getMediaItemAt)
+                val index = player.currentMediaItemIndex.coerceAtLeast(0)
+                val position = player.currentPosition.coerceAtLeast(0)
+                val playing = player.playWhenReady
+                val repeatMode = player.repeatMode
+                val shuffle = player.shuffleModeEnabled
+                restorePlayer = {
+                    player.pause()
+                    if (queue.isEmpty()) player.clearMediaItems() else {
+                        player.setMediaItems(queue, index.coerceIn(queue.indices), position)
+                        player.prepare()
+                    }
+                    player.repeatMode = repeatMode
+                    player.shuffleModeEnabled = shuffle
+                    player.playWhenReady = playing
+                }
+                player.pause()
+                player.shuffleModeEnabled = false
+                player.repeatMode = Player.REPEAT_MODE_OFF
+                player.setMediaItems(tracks.map(Track::mediaItem), 0, 5_000)
+                player.prepare()
+            }
+            val screen = instrumentation.startActivitySync(Intent(context, AurioActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+            activity = screen
+            originalOrientation = screen.requestedOrientation
+            main { screen.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
+            val first = tracks.first()
+            val second = tracks[1]
+            val withoutCover = tracks.last()
+            fun playingTrack(track: Track): Boolean {
+                var playing = false
+                main { playing = player.isPlaying && player.currentMediaItem?.mediaId == track.uri && player.currentPosition > 100 }
+                return playing && textPresent(track.title)
+            }
+            click(first.title, tab = true)
+            click("再生メニュー")
+            click("横置きスタンバイ")
+            val standby = standbyController(screen)
+            main { player.play() }
+            eventually("fixture plays before rotation") { playingTrack(first) }
+            main {
+                assertTrue("The player menu arms standby", standby.armed)
+                driveStandbyOrientation(standby, 270)
+            }
+            eventually("standby opens in landscape while playback continues") {
+                screen.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE &&
+                    textPresent("スタンバイを終了") && playingTrack(first)
+            }
+            withVinylRecording {
+                screenshot("v180-vinyl-playing")
+                exerciseVinylStandby(screen, player)
+                click("次の曲")
+                eventually("next track advances while the standby controls show it") { playingTrack(second) }
+                screenshot("v180-vinyl-next")
+                click("前の曲")
+                eventually("previous track advances while the standby controls show it") { playingTrack(first) }
+                main { player.seekTo(19_550) }
+                eventually("natural transition updates playback and the standby title") { playingTrack(second) }
+                repeat(10) { step ->
+                    main { player.seekToDefaultPosition(step % 2) }
+                    Thread.sleep(55)
+                }
+                eventually("only the most recent of ten quick skips remains on screen") {
+                    playingTrack(second) && !textPresent(first.title) &&
+                        nodes().count { it.isVisibleToUser && it.contentDescription?.toString() == "レコード盤" } == 1
+                }
+                main { player.seekToDefaultPosition(2) }
+                eventually("the track without artwork still has a usable disc") {
+                    playingTrack(withoutCover) && textPresent("レコード盤")
+                }
+                main {
+                    player.seekToDefaultPosition(1)
+                    driveStandbyOrientation(standby, 0)
+                }
+                eventually("portrait returns to the regular player and playback continues") {
+                    screen.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT &&
+                        textPresent("プレイヤーを閉じる") && !textPresent("レコード盤") && playingTrack(second)
+                }
+                main { assertNull(player.playerError) }
+                screenshot("v180-vinyl-portrait")
+            }
+        } finally {
+            main {
+                activity?.let { screen ->
+                    screen.requestedOrientation = originalOrientation
+                    screen.finish()
+                }
+                restorePlayer?.invoke()
+            }
+            Thread.sleep(350)
+            app.settings.saveSnapshot(originalSnapshot)
+            future?.let { saved -> main { MediaController.releaseFuture(saved) } }
+            assertTrue(directory.name == "vinyl-fixture-$id" && directory.parentFile == context.filesDir)
+            directory.deleteRecursively()
+        }
+    }
+
+    private fun standbyController(activity: Activity): StandbyController {
+        val field = AurioActivity::class.java.getDeclaredField("standby").apply { isAccessible = true }
+        return field.get(activity) as StandbyController
+    }
+
+    private fun driveStandbyOrientation(standby: StandbyController, angle: Int) {
+        val field = StandbyController::class.java.getDeclaredField("sensor").apply { isAccessible = true }
+        val sensor = field.get(standby) as OrientationEventListener
+        sensor.onOrientationChanged(angle)
+        sensor.disable() // Keep the physical sensor from overriding the angle supplied by the test.
+    }
+
+    private fun withVinylRecording(exercise: () -> Unit) {
+        if (InstrumentationRegistry.getArguments().getString("recordVinyl") != "true") {
+            exercise()
+            return
+        }
+        instrumentation.uiAutomation.executeShellCommand(
+            "screenrecord --time-limit 18 --size 1200x540 /data/local/tmp/aurio-v180-vinyl.mp4",
+        ).use {
+            Thread.sleep(1_200)
+            exercise()
+        }
+    }
+
     private fun exerciseVinylStandby(activity: Activity, player: MediaController) {
         fun position(): Long {
             var result = 0L
@@ -979,33 +1103,46 @@ class UiSmokeTest {
             return result
         }
         val view = activity.window.decorView
-        val disc = checkNotNull(nodes().firstOrNull { it.contentDescription?.toString() == "レコード盤" })
+        eventually("standby seek bar is ready") {
+            nodes().any { node -> node.isVisibleToUser && node.contentDescription?.toString() == "再生位置" &&
+                node.actionList.any { it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id } }
+        }
+        val visible = nodes().filter { it.isVisibleToUser }
+        val disc = visible.single { it.contentDescription?.toString() == "レコード盤" }
+        val seek = visible.single { it.contentDescription?.toString() == "再生位置" }
         val rect = android.graphics.Rect().also(disc::getBoundsInScreen)
+        val seekBounds = android.graphics.Rect().also(seek::getBoundsInScreen)
+        assertTrue("The record is to the left of the shared seek bar", rect.centerX() < seekBounds.centerX())
         val origin = IntArray(2).also(view::getLocationOnScreen)
         fun point(x: Float, y: Float) = Pair(
             (rect.left - origin[0] + x * rect.width()) / view.width,
             (rect.top - origin[1] + y * rect.height()) / view.height,
         )
-        fun drag(from: Pair<Float, Float>, to: Pair<Float, Float>, cancel: Boolean = false, inspect: (() -> Unit)? = null) {
-            swipe(activity, from.first, from.second, to.first, to.second, 350, cancel = cancel, inspect = inspect)
-        }
         main { player.pause(); player.seekTo(5_000) }
         eventually("standby fixture is positioned") { position() in 4_950..5_050 }
         Thread.sleep(450)
         val before = position()
-        val rimStart = point(.10f, .54f)
-        val rimEnd = point(.28f, .16f)
-        drag(rimStart, rimEnd) { assertEquals("Drag previews without seeking", before, position()) }
-        eventually("clockwise turn advances playback") { position() in (before + 1_400)..(before + 2_200) }
-        drag(rimEnd, rimStart)
-        eventually("counterclockwise turn returns to the original position") { position() in (before - 100)..(before + 100) }
-        drag(rimStart, rimEnd, cancel = true)
-        assertTrue("Cancelling the turn leaves the position unchanged", position() in (before - 100)..(before + 100))
-        val armStart = point(1.01f, .21f)
-        val armEnd = point(.69f, .49f)
-        drag(armStart, armEnd)
-        eventually("tonearm drag sets an absolute playback position") { position() in 13_500..18_500 }
-        screenshot("v130-vinyl-seek")
+        for ((gesture, points) in listOf(
+            "record rim" to (point(.10f, .54f) to point(.28f, .16f)),
+            "tonearm" to (point(1.01f, .21f) to point(.69f, .49f)),
+        )) {
+            val (start, end) = points
+            swipe(activity, start.first, start.second, end.first, end.second, 350)
+            Thread.sleep(300)
+            main { assertFalse("Dragging the $gesture leaves playback paused", player.playWhenReady) }
+            assertEquals("Dragging the $gesture leaves playback position unchanged", before, position())
+        }
+        assertFalse("The tonearm has no accessibility action", textPresent("トーンアーム"))
+        assertFalse("The record has no accessibility seek actions", disc.actionList.any { action ->
+            action.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id ||
+                action.label?.toString() in setOf("10秒戻す", "10秒進める")
+        })
+        val seekProgress = Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, 11_000f) }
+        assertTrue("The shared seek bar dispatches seek", seek.performAction(
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id, seekProgress,
+        ))
+        eventually("the shared seek bar sets the actual player position") { position() in 10_950..11_050 }
+        screenshot("v180-vinyl-seek")
         val middle = point(.5f, .5f)
         val touchTime = SystemClock.uptimeMillis()
         main {
